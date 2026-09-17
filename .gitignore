@@ -1,0 +1,36 @@
+# Secrets and local configuration — .env.example is committed, .env is not.
+.env
+.env.*
+!.env.example
+
+# dbt
+target/
+dbt_packages/
+logs/
+.user.yml
+
+# dlt
+.dlt/secrets.toml
+*.duckdb
+
+# Airflow
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+# .venv is a symlink to venv/ so `uv run` finds it. git sees a symlink as a file,
+# which the trailing-slash patterns above do not match -- hence this bare entry.
+.venv
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

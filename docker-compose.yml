@@ -1,0 +1,56 @@
+# NordStack take-home — local infrastructure.
+#
+#   mysql     simulated operational billing source system (Phase 2 bootstraps it from seed_data/)
+#   postgres  analytics warehouse; dlt lands the `raw` schema here, dbt builds on top
+#
+# Airflow is added in Phase 12 — kept out until then so this file stays reviewable.
+#
+# Credentials default to the values in CANDIDATE_BRIEF.md so `docker compose up -d` works
+# from a clean clone with no .env at all. Override them via .env (see .env.example);
+# never commit a real .env.
+
+# Explicit project name: the working directory is literally "DE-Assessment " (with a
+# trailing space), which Compose would otherwise use to derive the project name.
+name: nordstack
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: nordstack-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dbt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dbt_password}
+      POSTGRES_DB: ${POSTGRES_DB:-analytics}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dbt_user} -d ${POSTGRES_DB:-analytics}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mysql:
+    image: mysql:8.0
+    container_name: nordstack-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-billing}
+      MYSQL_USER: ${MYSQL_USER:-billing_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-billing_password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysqldata:/var/lib/mysql
+    healthcheck:
+      # $$ escapes Compose interpolation so the shell inside the container expands it.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  pgdata:
+  mysqldata:

@@ -1,0 +1,72 @@
+version: 2
+
+models:
+
+  # NO TESTS AT THIS LAYER -- by design.
+  #
+  # Tests live at the two ends of the pipeline:
+  #   raw   (warn)  -> detect what arrived from the billing system
+  #   marts (error) -> assert what is published to consumers
+  #
+  # Staging sits between them: it standardizes format and guarantees grain, but asserts
+  # nothing. Testing it would mostly restate the raw tests against a copy of the same
+  # rows, and the defects it does NOT repair (orphans, negative amounts, the impossible
+  # end_date) would fail here by design.
+  #
+  # What remains below is documentation. dbt docs generate reads these descriptions,
+  # and the brief asks for them on the models and their key columns.
+
+  - name: stg_customers
+    description: >
+      One row per customer, deduplicated, with casing and whitespace standardized.
+      Values are not repaired: a blank country arrives as NULL rather than 'UNKNOWN',
+      and a malformed email stays malformed. See quarantine/invalid_customers.
+    columns:
+      - name: customer_id
+        description: Business key. Unique here -- the raw duplicate C0023 is collapsed.
+      - name: country
+        description: >
+          ISO-2 code, uppercased. NULL where the source was blank (C0008) -- the marts
+          COALESCE it to 'UNKNOWN' when reporting, which is a presentation decision.
+      - name: email
+        description: As supplied. C0016 holds the literal 'not-an-email'.
+      - name: created_at
+        description: As supplied. C0041 is dated in the future.
+
+  - name: stg_subscriptions
+    description: >
+      One row per subscription, deduplicated, with plan and status normalized. Values
+      are not repaired: end_date keeps its impossible value (S00034) and monthly_price
+      its negative one (S00048). See quarantine/invalid_subscriptions.
+    columns:
+      - name: subscription_id
+        description: Business key. Unique here -- the raw duplicate S00006 is collapsed.
+      - name: customer_id
+        description: FK to customers. Not guaranteed to resolve -- S00011 points at C9999.
+      - name: status
+        description: Normalized lifecycle status. S00026's 'ACTIVE' is folded to 'active'.
+      - name: plan_name
+        description: Normalized plan.
+      - name: end_date
+        description: As supplied. May precede start_date (S00034).
+      - name: monthly_price
+        description: As supplied. May be non-positive (S00048).
+
+  - name: stg_invoices
+    description: >
+      One row per monthly invoice. Status and currency are normalized, so downstream
+      filters are safe. Amounts are not repaired: null on I000322, negative on
+      I000725-I000731. See quarantine/invalid_invoices.
+    columns:
+      - name: invoice_id
+        description: Business key, unique in the source.
+      - name: subscription_id
+        description: FK to subscriptions. Not guaranteed to resolve -- I000601 points at S99999.
+      - name: status
+        description: >
+          Normalized payment status. I000451's 'PAID ' is folded to 'paid' here, so
+          `where status = 'paid'` is safe for every consumer.
+      - name: amount
+        description: As supplied. Null on I000322, negative on I000725-I000731.
+      - name: currency
+        description: Normalized ISO-3 currency. EUR, plus two SEK invoices the marts convert.

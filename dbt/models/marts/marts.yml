@@ -1,0 +1,93 @@
+version: 2
+
+models:
+
+  # Marts run at ERROR severity: this is the published contract. Raw tests warn because
+  # the source is expected to be dirty; here, a failure means bad data escaped
+  # quarantine and reached a consumer.
+
+  - name: fct_mrr
+    description: >
+      Monthly Recurring Revenue by month and plan, from PAID invoices only, converted to
+      EUR. Grain: one row per (invoice_month, plan_name). Months with no paid invoice for
+      a plan are absent rather than zero-filled.
+    columns:
+      - name: invoice_month
+        description: First day of the month the invoice was issued.
+        data_tests: [not_null]
+      - name: plan_name
+        description: Subscription plan the revenue is attributed to.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['starter', 'growth', 'scale']
+      - name: mrr_eur
+        description: >
+          Sum of paid invoice amounts in EUR for the month and plan. Static FX rates --
+          see int_fx_rates for the assumption.
+        data_tests: [not_null]
+      - name: paid_invoices
+        description: Number of paid invoices behind mrr_eur.
+        data_tests: [not_null]
+      - name: paying_subscriptions
+        description: Distinct subscriptions that paid in the month.
+      - name: paying_customers
+        description: Distinct customers that paid in the month.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [invoice_month, plan_name]
+
+  - name: customer_ltv
+    description: >
+      Lifetime value to date: total paid revenue per customer in EUR, with country, plan
+      mix and current subscription status. Grain: one row per customer, including those
+      with no paid revenue.
+    columns:
+      - name: customer_id
+        description: Business key.
+        data_tests: [unique, not_null]
+      - name: country
+        description: ISO-2 country, or 'UNKNOWN' where the source was blank (C0008).
+        data_tests: [not_null]
+      - name: total_revenue_eur
+        description: Sum of paid invoices in EUR. Zero, never NULL, for customers who never paid.
+        data_tests: [not_null]
+      - name: plan_mix
+        description: >
+          Sorted distinct list of the customer's plans, e.g. 'growth, scale'. NULL only
+          if the customer holds no mart-eligible subscription.
+      - name: current_subscription_status
+        description: >
+          'active' if any subscription is active, else the status of the most recently
+          started one. May read 'active' on the strength of a subscription that has not
+          begun (C0101 / S00149).
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['active', 'cancelled', 'paused']
+      - name: subscription_count
+        description: Mart-eligible subscriptions held. Excludes quarantined ones.
+        data_tests: [not_null]
+
+  - name: subscription_churn
+    description: >
+      Cancellations and MRR lost per month. Grain: one row per cancellation month.
+      Excludes subscriptions whose cancellation date is not trustworthy (S00034).
+      Includes scheduled future cancellations, flagged by is_future_cancellation.
+    columns:
+      - name: churn_month
+        description: First day of the month the cancellation took effect.
+        data_tests: [unique, not_null]
+      - name: cancelled_subscriptions
+        description: Subscriptions cancelled in the month.
+        data_tests: [not_null]
+      - name: mrr_lost_eur
+        description: Sum of monthly_price over those subscriptions. Already EUR; no FX applies.
+        data_tests: [not_null]
+      - name: churned_customers
+        description: Distinct customers behind those cancellations.
+      - name: is_future_cancellation
+        description: True where the cancellation month is still in the future (E16).
+        data_tests: [not_null]
