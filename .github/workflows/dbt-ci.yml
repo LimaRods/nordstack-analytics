@@ -1,0 +1,145 @@
+name: dbt CI
+
+# Component-aware: only runs when dbt or the ingestion feeding it changes.
+# Airflow-only or docs-only changes do not trigger a warehouse build.
+on:
+  pull_request:
+    paths:
+      - 'dbt/**'
+      - 'ingestion/**'
+      - 'seed_data/**'
+      - '.github/workflows/dbt-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dbt/**'
+      - 'ingestion/**'
+      - 'seed_data/**'
+
+concurrency:
+  group: dbt-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dbt_user
+          POSTGRES_PASSWORD: dbt_password
+          POSTGRES_DB: analytics
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U dbt_user -d analytics"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: billing
+          MYSQL_USER: billing_user
+          MYSQL_PASSWORD: billing_password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -proot_password --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: '3306'
+      MYSQL_DATABASE: billing
+      MYSQL_USER: billing_user
+      MYSQL_PASSWORD: billing_password
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: '5432'
+      POSTGRES_DB: analytics
+      POSTGRES_USER: dbt_user
+      POSTGRES_PASSWORD: dbt_password
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need main's history for the state comparison
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # The warehouse must exist before dbt can read from it. This is the same
+      # sequence a reviewer runs locally.
+      - name: Bootstrap MySQL source
+        run: python ingestion/bootstrap_mysql.py
+
+      - name: Sync MySQL -> PostgreSQL raw
+        run: python ingestion/sync_mysql_to_postgres.py
+
+      - name: dbt deps
+        working-directory: dbt
+        run: dbt deps
+
+      # ---------------------------------------------------------------------
+      # Baseline: build main's version of the project into the `prod` target.
+      #
+      # This is what makes state comparison possible without a permanent
+      # production warehouse. `--defer --state` needs two things: a manifest to
+      # diff against, and real tables for the unmodified models to resolve to.
+      # Building main here provides both, in a database thrown away with the job.
+      #
+      # On a push to main there is nothing to compare against, so this is skipped
+      # and the next step builds everything.
+      # ---------------------------------------------------------------------
+      - name: Build baseline from main
+        if: github.event_name == 'pull_request'
+        run: |
+          git worktree add /tmp/baseline origin/${{ github.base_ref }}
+          cp -R dbt/dbt_packages /tmp/baseline/dbt/dbt_packages 2>/dev/null || true
+          cd /tmp/baseline/dbt
+          DBT_TARGET=prod dbt build --target-path /tmp/baseline-target
+        env:
+          DBT_TARGET: prod
+
+      # ---------------------------------------------------------------------
+      # PR: build only what changed, plus everything downstream of it.
+      #
+      #   state:modified+   the `+` is the downstream part -- a changed staging
+      #                     model rebuilds the marts that depend on it, so a
+      #                     break cannot hide behind an untouched consumer.
+      #   --defer --state   unmodified upstream models resolve to the baseline
+      #                     schema instead of being rebuilt.
+      #
+      # If nothing dbt-related changed, dbt selects zero models and exits 0.
+      # ---------------------------------------------------------------------
+      - name: Build modified models and their downstream
+        if: github.event_name == 'pull_request'
+        working-directory: dbt
+        run: |
+          dbt build \
+            --select "state:modified+" \
+            --defer --state /tmp/baseline-target \
+            --favor-state
+
+      # On main, there is no baseline to defer to: build the whole project.
+      - name: Build full project
+        if: github.event_name == 'push'
+        working-directory: dbt
+        run: dbt build
+
+      - name: Generate docs
+        working-directory: dbt
+        run: dbt docs generate
+
+      - name: Upload dbt artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-target-${{ github.run_id }}
+          path: dbt/target/
+          retention-days: 7
