@@ -1,0 +1,22 @@
+# Python 3.11 (see README). Install with:
+#   python -m venv venv && source venv/bin/activate
+#   pip install -r requirements.txt
+
+# --- Ingestion: MySQL -> PostgreSQL raw ---
+dlt[postgres,sql_database]>=1.6,<2.0
+PyMySQL>=1.1,<2.0
+psycopg2-binary>=2.9,<3.0
+
+# --- Transformation ---
+dbt-core>=1.9,<2.0
+dbt-postgres>=1.9,<2.0
+
+# --- Orchestration ---
+# Airflow pins many transitive deps; if resolution conflicts with dbt, install it
+# with the official constraints file:
+#   pip install "apache-airflow==2.10.5" \
+#     -c "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
+apache-airflow>=2.10,<3.0
+
+# --- Tests ---
+pytest>=8.0,<9.0

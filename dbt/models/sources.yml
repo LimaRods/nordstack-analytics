@@ -1,0 +1,123 @@
+version: 2
+
+sources:
+  - name: billing_raw
+    description: >
+      Raw mirror of the MySQL billing system, loaded by dlt. Deliberately preserves
+      source defects: dlt uses write_disposition="replace" rather than "merge" so that
+      nothing is deduplicated or cleaned during ingestion. See README decision #2.
+    schema: raw
+    database: analytics
+
+    # Raw-layer tests are DIAGNOSTIC. They run at warn severity because the source is
+    # expected to be dirty -- their job is to make the planted defects visible in every
+    # `dbt build`, not to break it. The same rules run at error severity on staging,
+    # where the data is supposed to be trustworthy. See CLAUDE.md section 9.
+    #
+    tables:
+
+      - name: customers
+        description: One row per customer, as exported by the billing system.
+        columns:
+          - name: customer_id
+            description: Business key. Not unique in raw
+            data_tests:
+              - not_null:
+                  config:
+                    severity: warn
+              - unique:
+                  config:
+                    severity: warn
+                    warn_if: ">0"
+          - name: country
+            description: ISO-2 country code.
+          - name: email
+            description: Contact email.
+          - name: created_at
+            description: Signup date.
+
+      - name: subscriptions
+        description: One row per subscription. A customer may hold several.
+        columns:
+          - name: subscription_id
+            description: Business key. Not unique in raw
+            data_tests:
+              - not_null:
+                  config:
+                    severity: warn
+              - unique:
+                  config:
+                    severity: warn
+          - name: customer_id
+            description: FK to customers.
+            data_tests:
+              - not_null:
+                  config:
+                    severity: warn
+              - relationships:
+                  arguments:
+                    to: source('billing_raw', 'customers')
+                    field: customer_id
+                  config:
+                    severity: warn
+          - name: plan_name
+            description: Subscription plan.
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: ['starter', 'growth', 'scale']
+                  config:
+                    severity: warn
+          - name: status
+            description: Lifecycle status. 
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: ['active', 'cancelled', 'paused']
+                  config:
+                    severity: warn
+          - name: monthly_price
+            description: Recurring price in EUR
+
+      - name: invoices
+        description: One row per monthly invoice, tied to a subscription.
+        columns:
+          - name: invoice_id
+            description: Business key. Unique in raw -- no duplicates planted here.
+            data_tests:
+              - not_null:
+                  config:
+                    severity: warn
+              - unique:
+                  config:
+                    severity: warn
+          - name: subscription_id
+            description: FK to subscriptions.
+            data_tests:
+              - not_null:
+                  config:
+                    severity: warn
+              - relationships:
+                  arguments:
+                    to: source('billing_raw', 'subscriptions')
+                    field: subscription_id
+                  config:
+                    severity: warn
+          - name: status
+            description: Payment status. I000451 holds 'PAID ' -- uppercase with a trailing space (D13).
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: ['paid', 'open', 'failed']
+                  config:
+                    severity: warn
+          - name: currency
+            description: ISO-3 currency code
+            data_tests:
+              - accepted_values:
+                  arguments:
+                    values: ['EUR', 'SEK']
+                  config:
+                    severity: warn
+          - name: amount
+            description: Invoice amount. I000322 is null
