@@ -1,7 +1,6 @@
 {{ config(severity = 'warn') }}
 
--- monthly_price is the basis for MRR lost. A negative price would make a cancellation add
--- to revenue; a null one would drop it silently. Expected: S00048 at -99.00.
+-- monthly_price is the basis for MRR lost, so a negative one would add to revenue.
 
 select
     subscription_id,

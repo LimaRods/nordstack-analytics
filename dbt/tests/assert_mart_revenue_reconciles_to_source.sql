@@ -1,6 +1,5 @@
--- Mart contract: fct_mrr and customer_ltv aggregate the same base along different axes,
--- so their totals must agree. A divergence means a join fanned out -- a bug neither mart
--- reveals alone. Returns rows only on failure.
+-- Mart contract: both marts aggregate the same base, so their totals must agree.
+-- A divergence means a join fanned out. Returns rows only on failure.
 
 with mrr as (
     select round(sum(mrr_eur), 2) as total from {{ ref('fct_mrr') }}

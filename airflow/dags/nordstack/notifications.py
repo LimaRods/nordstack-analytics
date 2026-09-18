@@ -1,8 +1,5 @@
-"""Email notifications for the pipeline.
-
-Sending goes through smtplib with credentials from the environment, so the whole
-notification path stays in version control rather than in airflow.cfg. A missing
-mailbox is logged, never raised -- see _send.
+"""Email notifications. Credentials come from the environment, so the whole notification
+path stays in version control rather than in airflow.cfg.
 """
 
 from __future__ import annotations
@@ -29,8 +26,7 @@ def _send(subject: str, html: str) -> None:
     password = os.environ.get("SMTP_PASSWORD")
     recipients = _recipients()
 
-    # A missing mailbox is a configuration problem, not a data one: failing here would
-    # mask the pipeline error the email was reporting.
+    # Failing here would mask the pipeline error the email was reporting.
     if not (user and password and recipients):
         log.warning(
             "Email not sent -- SMTP_USER, SMTP_PASSWORD or ALERT_EMAIL_TO is unset. "
@@ -56,8 +52,7 @@ def _send(subject: str, html: str) -> None:
             smtp.sendmail(user, recipients, message.as_string())
         log.info("Notification sent to %s", ", ".join(recipients))
     except Exception:
-        # Swallowed deliberately, and only here: a failure callback that raises would
-        # hide the original failure. Logged in full so it stays diagnosable.
+        # Only swallowed here: a failure callback that raises hides the real failure.
         log.exception("Failed to send notification: %s", subject)
 
 

@@ -1,16 +1,8 @@
 """NordStack analytics pipeline: dlt_sync -> validate_raw -> dbt_build.
 
-Runs every five minutes and emails on success and failure.
-
-Three tasks rather than one script, so a failure names itself: a red `dlt_sync` is an
-ingestion problem, a red `validate_raw` means ingestion reported success while the
-warehouse disagrees, and a red `dbt_build` is a modelling or data-quality problem.
-Airflow also retries only the task that failed.
-
-Retries are safe because every task is idempotent -- dlt replaces rather than appends,
-validate_raw only reads, and dbt rebuilds in full. They are bounded at two attempts:
-broken SQL or a failing data-quality test fails identically every time and should
-surface rather than spin.
+Runs every five minutes and emails on success and failure. Three tasks rather than one
+script, so a failure says which layer it came from and a retry only repeats that task.
+Every task is idempotent, so retries are safe; they are bounded at two attempts.
 """
 
 from __future__ import annotations
@@ -25,7 +17,6 @@ from airflow.operators.python import PythonOperator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Imported rather than shelled out to, so a failure surfaces as a real traceback.
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -43,8 +34,8 @@ DBT_BIN = REPO_ROOT / "venv" / "bin" / "dbt"
 def _run(callable_returning_exit_code, label: str) -> None:
     """Call a script's main() and raise on a non-zero exit code.
 
-    PythonOperator marks a task successful unless it raises, so a main() that *returns*
-    1 -- as both ingestion CLIs do -- would report a failed load as a green task.
+    PythonOperator only fails a task if the callable raises, and both ingestion CLIs
+    return an exit code instead.
     """
     exit_code = callable_returning_exit_code()
     if exit_code != 0:
@@ -58,12 +49,7 @@ def sync_mysql_to_postgres(**_) -> None:
 
 
 def validate_raw(**_) -> None:
-    """Re-assert the invariants after ingestion, independently of the loader.
-
-    The sync script already validates its own work; repeating it here is deliberate,
-    because a loader that reports success while leaving the warehouse wrong is exactly
-    what a self-check cannot catch.
-    """
+    """Re-assert the invariants after ingestion, independently of the loader."""
     import logging
 
     from sqlalchemy import create_engine, text
@@ -91,8 +77,6 @@ def validate_raw(**_) -> None:
 
             if src_rows != dst_rows:
                 problems.append(f"{table}: {src_rows} rows at source, {dst_rows} in raw")
-            # Row counts alone would still pass if rows were deduplicated and
-            # duplicated in equal measure. This is the check that catches that.
             if src_keys != dst_keys:
                 problems.append(
                     f"{table}: {src_keys} distinct {primary_key} at source, {dst_keys} in raw "
@@ -111,12 +95,8 @@ def validate_raw(**_) -> None:
 
 
 def dbt_build(**context) -> None:
-    """Run `dbt build` -- models and tests interleaved, in dependency order.
-
-    `build` rather than `run` then `test`: a failing test skips that model's dependents,
-    so bad data stops where it appears instead of reaching the marts.
-
-    The target comes from the run, not from this file -- see nordstack/config.py.
+    """Run `dbt build`: a failing test skips that model's dependents, so bad data stops
+    where it appears. The target comes from the run, not from this file.
     """
     import logging
     import subprocess
@@ -125,7 +105,6 @@ def dbt_build(**context) -> None:
     target = resolve_dbt_target(context)
     log.info("Running dbt build against target=%s", target)
 
-    # Visible in the UI's XCom tab, so the schema a run published to needs no log dive.
     task_instance = context.get("task_instance")
     if task_instance is not None:
         task_instance.xcom_push(key="dbt_target", value=target)
@@ -136,7 +115,6 @@ def dbt_build(**context) -> None:
         capture_output=True,
         text=True,
     )
-    # dbt's output is the diagnostic: log it before deciding.
     log.info(result.stdout)
     if result.stderr:
         log.warning(result.stderr)
@@ -146,10 +124,8 @@ def dbt_build(**context) -> None:
 
 default_args = {
     "owner": "analytics",
-    # Bounded, never infinite: two attempts recover a dropped connection.
     "retries": 2,
     "retry_delay": timedelta(seconds=30),
-    # A task that outlives the schedule interval is stuck, not slow.
     "execution_timeout": timedelta(minutes=4),
 }
 
@@ -162,8 +138,7 @@ with DAG(
     max_active_runs=1,      # two runs replacing the same tables would race each other
     dagrun_timeout=timedelta(minutes=4),   # under the interval, so a stuck run cannot pile up
     default_args=default_args,
-    # Chosen per run on the "Trigger DAG w/ config" form, defaulting to the
-    # environment's target, so a scheduled run or a local test stays off production.
+    # Chosen per run on the trigger form; defaults to dev, never to prod.
     params={
         "dbt_target": Param(
             default=environment_default(),
@@ -186,7 +161,6 @@ with DAG(
     sync = PythonOperator(
         task_id="dlt_sync",
         python_callable=sync_mysql_to_postgres,
-        # Measured from DAG run start: the earliest signal the cadence is at risk.
         sla=timedelta(minutes=2),
         doc_md="Extract from MySQL, normalize, load into PostgreSQL `raw` with "
                "write_disposition=replace. Idempotent: reloads rather than appends.",

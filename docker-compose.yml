@@ -1,8 +1,5 @@
 # Local infrastructure: MySQL as the simulated billing source, PostgreSQL as the
-# analytics warehouse. Airflow runs on the host rather than in Compose.
-#
-# Credentials default to the values in the brief so `docker compose up -d` works from a
-# clean clone with no .env. Override them via .env; never commit a real one.
+# analytics warehouse. Defaults work from a clean clone; override them via .env.
 
 name: nordstack
 
@@ -37,7 +34,6 @@ services:
     volumes:
       - mysqldata:/var/lib/mysql
     healthcheck:
-      # $$ escapes Compose interpolation so the shell inside the container expands it.
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
       timeout: 5s

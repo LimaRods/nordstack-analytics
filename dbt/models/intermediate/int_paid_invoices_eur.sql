@@ -1,10 +1,5 @@
--- Paid invoices normalized to EUR. The revenue base for fct_mrr and customer_ltv.
---
--- Three business decisions live here: only `paid` counts as revenue, quarantined
--- invoices are dropped, and amounts are converted through int_fx_rates.
---
--- Joined to int_subscriptions rather than stg_subscriptions so an invoice belonging to
--- an excluded subscription cannot slip into revenue through the back door.
+-- Paid invoices converted to EUR, with quarantined rows removed. The revenue base
+-- for fct_mrr and customer_ltv.
 
 with invoices as (
 

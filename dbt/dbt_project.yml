@@ -12,9 +12,7 @@ seed-paths: ["seeds"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
-# Materializations reflect current volume (~3.1k rows). One schema per target rather
-# than per layer: the prefix in each model name already says where it sits, so the
-# environment boundary stays the only thing a reader has to track.
+# Materializations reflect current volume (~3.1k rows).
 models:
   nordstack:
     staging:
@@ -26,8 +24,7 @@ models:
     marts:
       +materialized: table
 
-# Severity encodes where the contract applies: raw warns (the source is expected to be
-# dirty), marts error (the published contract must hold).
+# Raw warns, marts error.
 data_tests:
   nordstack:
     staging:

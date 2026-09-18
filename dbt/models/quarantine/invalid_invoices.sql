@@ -1,11 +1,6 @@
--- Invoices breaching at least one data-quality rule, detected against the source.
---
--- Status is normalized inside the rule expressions because staging has not run yet:
--- an exact match on 'paid' would miss I000451's 'PAID ' and wrongly clear it.
---
--- excluded_from_marts separates two populations:
---   true  -> unattributable, or the amount is unusable: must not reach revenue
---   false -> usable; only the formatting is off, and the marts repair it
+-- Invoices breaching a data-quality rule, detected against the source.
+-- excluded_from_marts: true = unusable, must not reach revenue; false = only the
+-- formatting is off and the marts repair it.
 
 with source as (
 
@@ -16,7 +11,6 @@ with source as (
 subscriptions as (
 
     -- DISTINCT guards against S00006, which appears twice at source: joining it
-    -- un-deduplicated would double every invoice on that subscription.
     select distinct subscription_id from {{ source('billing_raw', 'subscriptions') }}
 
 ),

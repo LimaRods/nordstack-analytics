@@ -1,12 +1,8 @@
 name: dbt CD
 
-# Promotes the dbt project on merge to main: a full build against the prod target, then
-# the docs and the manifest CI defers to.
-#
-# "Production" here is whatever POSTGRES_* points at -- in this assessment an ephemeral
-# service container, so the run proves the promotion is correct rather than persisting
-# it. Pointing the same workflow at a real warehouse is a change to repository
-# variables, not to this file.
+# Promotes the dbt project on merge to main: a full build against prod, then the docs
+# and the manifest. "Production" here is whatever POSTGRES_* points at, so pointing this
+# at a real warehouse is a change to repository variables, not to this file.
 
 on:
   push:
@@ -18,8 +14,7 @@ on:
       - '.github/workflows/dbt-cd.yml'
   workflow_dispatch:
 
-# Never two deployments at once, and never cancel one midway: a half-applied deployment
-# is worse than a queued one.
+# Never two deployments at once, and never cancel one midway.
 concurrency:
   group: dbt-cd-production
   cancel-in-progress: false
@@ -65,7 +60,7 @@ jobs:
       POSTGRES_DB: ${{ vars.POSTGRES_DB }}
       POSTGRES_USER: ${{ vars.POSTGRES_USER }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      # The one place prod is selected. Everywhere else falls back to dev.
+      # The one place prod is selected.
       DBT_TARGET: prod
 
     steps:
@@ -93,8 +88,7 @@ jobs:
         working-directory: dbt
         run: dbt debug --target prod
 
-      # Full build, not state:modified+: a deployment must leave production internally
-      # consistent, and every test must pass against what is published.
+      # Full build: a deployment must leave production consistent.
       - name: Deploy models to production
         working-directory: dbt
         run: dbt build --target prod
@@ -103,7 +97,6 @@ jobs:
         working-directory: dbt
         run: dbt docs generate --target prod
 
-      # The production state. CI defers to this once a persistent warehouse exists.
       - name: Publish production manifest
         uses: actions/upload-artifact@v4
         with:

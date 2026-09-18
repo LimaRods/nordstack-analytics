@@ -2,10 +2,8 @@ version: 2
 
 models:
 
-  # No tests at this layer, by design. Tests live at the two ends: raw (warn) detects
-  # what arrived, marts (error) assert what is published. Staging standardizes format
-  # and guarantees grain but asserts nothing -- testing it would restate the raw tests
-  # against a copy of the same rows.
+  # No tests at this layer, by design: raw detects what arrived, marts assert what is
+  # published. Staging asserts nothing.
 
   - name: stg_customers
     description: >

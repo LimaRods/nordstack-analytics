@@ -2,8 +2,7 @@ version: 2
 
 models:
 
-  # Error severity: this is the published contract. A failure here means bad data
-  # escaped quarantine and reached a consumer.
+  # Error severity: a failure here means bad data escaped quarantine.
 
   - name: fct_mrr
     description: >

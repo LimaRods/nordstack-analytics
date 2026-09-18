@@ -1,7 +1,6 @@
 {{ config(severity = 'warn') }}
 
--- email feeds no mart, so a malformed one never justifies withholding revenue. This
--- exists so the defect is counted in every build. Expected: C0016, 'not-an-email'.
+-- email feeds no mart, so this only makes the defect visible.
 
 select
     customer_id,

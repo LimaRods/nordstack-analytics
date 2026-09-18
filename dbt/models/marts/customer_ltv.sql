@@ -1,12 +1,5 @@
--- Lifetime value to date. Grain: one row per customer, including those with no revenue.
---
--- LEFT JOINs throughout: an INNER join would silently drop customers whose
--- subscriptions have not billed yet and understate their plan mix. Revenue is
--- COALESCEd to 0 rather than left NULL.
---
--- Current status, since a customer may hold several subscriptions: 'active' if any is
--- active, otherwise the status of the most recently started one. This can report a
--- customer as active on the strength of a subscription that has not begun yet.
+-- Lifetime value per customer. LEFT JOINs throughout, so a customer whose
+-- subscription has not billed yet still appears with zero revenue.
 
 with customers as (
 
@@ -39,7 +32,6 @@ subscription_summary as (
         customer_id,
         count(*)                                                  as subscription_count,
         count(*) filter (where status = 'active')                 as active_subscriptions,
-        -- Sorted so the value is stable across runs and comparable between customers.
         string_agg(distinct plan_name, ', ' order by plan_name)   as plan_mix
     from subscriptions
     group by customer_id
@@ -55,8 +47,8 @@ current_status as (
     order by
         customer_id,
         (status = 'active') desc,   -- any active subscription wins
-        start_date desc,            -- otherwise the most recently started
-        subscription_id             -- deterministic tie-break
+        start_date desc,
+        subscription_id
 )
 
 select

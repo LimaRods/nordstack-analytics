@@ -1,16 +1,8 @@
 """Sync the MySQL billing source into the PostgreSQL `raw` schema with dlt.
 
-Runs on every Airflow schedule and must be safe to retry.
-
-Write strategy is `replace`, not `merge`. dlt's merge deduplicates on the primary key
-before writing, which would silently collapse the planted duplicates C0023 and S00006
-during ingestion -- and the brief requires the tests to catch those defects. `replace`
-reloads each run, so raw mirrors the source exactly (121 / 175 / 2855), reruns stay
-idempotent, and deduplication moves to dbt staging where it is visible and tested.
-
-The business key is still declared as a resource hint: dlt maps only the `unique` hint
-to a Postgres constraint, so `primary_key` documents the key without rejecting the
-duplicates.
+Write strategy is `replace`, not `merge`: dlt's merge deduplicates on the primary key,
+which would collapse the planted duplicates during ingestion. `replace` reloads each run,
+so raw mirrors the source exactly and reruns stay idempotent.
 
 Usage:
     python ingestion/sync_mysql_to_postgres.py
@@ -31,7 +23,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PIPELINE_NAME = "nordstack_billing"
 DATASET_NAME = "raw"
 
-# The business key is declared per table so the schema documents it.
 TABLES = {
     "customers": "customer_id",
     "subscriptions": "subscription_id",
@@ -42,7 +33,7 @@ log = logging.getLogger("sync_mysql_to_postgres")
 
 
 def load_dotenv(path: Path) -> None:
-    """Minimal .env loader. Existing environment variables always win."""
+    """Minimal .env loader. Existing environment variables win."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -54,7 +45,7 @@ def load_dotenv(path: Path) -> None:
 
 
 def mysql_url() -> str:
-    """Source connection string, built from environment configuration."""
+    """Source connection string."""
     return (
         f"mysql+pymysql://{os.environ.get('MYSQL_USER', 'billing_user')}"
         f":{os.environ.get('MYSQL_PASSWORD', 'billing_password')}"
@@ -65,7 +56,7 @@ def mysql_url() -> str:
 
 
 def postgres_url() -> str:
-    """Destination connection string, built from environment configuration."""
+    """Destination connection string."""
     return (
         f"postgresql://{os.environ.get('POSTGRES_USER', 'dbt_user')}"
         f":{os.environ.get('POSTGRES_PASSWORD', 'dbt_password')}"
@@ -76,7 +67,7 @@ def postgres_url() -> str:
 
 
 def build_source():
-    """The three billing tables, each set to replace and keyed by its business PK."""
+    """The three billing tables, each set to replace and keyed by its business key."""
     source = sql_database(
         credentials=mysql_url(),
         table_names=list(TABLES),
@@ -93,8 +84,7 @@ def build_source():
 def validate(pipeline) -> list[str]:
     """Check the load against the source. Returns a list of failures.
 
-    Row-count parity catches a lost or double-loaded row; distinct-key parity catches
-    silent deduplication, which is what a regression back to `merge` would look like.
+    Distinct-key parity is the one that catches silent deduplication.
     """
     failures: list[str] = []
     from sqlalchemy import create_engine, text
@@ -160,8 +150,7 @@ def main() -> int:
     load_info = pipeline.run(build_source())
     log.info("%s", load_info)
 
-    # dlt records failed jobs but still exits 0; without this a partial load would be
-    # reported as success.
+    # dlt records failed jobs but still exits 0.
     load_info.raise_on_failed_jobs()
 
     failures = validate(pipeline)

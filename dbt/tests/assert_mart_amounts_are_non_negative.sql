@@ -1,6 +1,4 @@
--- Mart contract: no published figure may be negative. A negative value would mean a
--- quarantine rule failed -- S00048's -99.00 price and its invoices are the only source.
--- Returns rows only on failure.
+-- Mart contract: no published figure may be negative. Returns rows only on failure.
 
 select 'fct_mrr' as model, invoice_month::text as key, mrr_eur as value
 from {{ ref('fct_mrr') }}

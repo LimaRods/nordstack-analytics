@@ -1,9 +1,4 @@
--- One row per customer. Standardizes format; does not repair values -- a blank country
--- stays blank, a malformed email stays malformed. Substituting a value the source never
--- had is a business decision and belongs in the mart that needs it.
---
--- Deduplication is the exception: a duplicate row is a grain problem, and C0023's two
--- rows are byte-identical, so collapsing them loses nothing.
+-- One row per customer. Deduplicated; format standardized, values not repaired.
 
 with source as (
 

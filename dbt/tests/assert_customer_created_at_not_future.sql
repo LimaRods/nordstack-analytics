@@ -1,7 +1,6 @@
 {{ config(severity = 'warn') }}
 
--- A customer cannot be created in the future, nor after their own subscription started.
--- Expected: C0041, dated 2027 and nearly three years after S00054 began.
+-- A customer cannot be created in the future, nor after their own subscription began.
 
 select
     c.customer_id,

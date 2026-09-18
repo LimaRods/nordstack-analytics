@@ -1,5 +1,4 @@
 packages:
-  # unique_combination_of_columns asserts the grain of fct_mrr; the built-in `unique`
-  # covers a single column only.
+  # unique_combination_of_columns asserts the grain of fct_mrr.
   - package: dbt-labs/dbt_utils
     version: [">=1.1.0", "<2.0.0"]

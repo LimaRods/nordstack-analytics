@@ -1,19 +1,8 @@
--- NordStack -- simulated operational billing source (MySQL 8.0).
--- Executed by ingestion/bootstrap_mysql.py; dlt reads these tables into PostgreSQL raw.
+-- Simulated operational billing source (MySQL 8.0).
 --
--- No PRIMARY KEY, FOREIGN KEY, CHECK or NOT NULL constraints, deliberately. A real
--- billing system would declare all of them; here each would reject a planted defect at
--- INSERT time and destroy the data-quality issue the dbt tests exist to catch:
---
---   PRIMARY KEY  -> duplicate rows C0023, S00006
---   FOREIGN KEY  -> orphans S00011 -> C9999, I000601 -> S99999
---   CHECK        -> negative money S00048, I000725-I000731
---   NOT NULL     -> blank country C0008, null amount I000322
---
--- The business key is declared where it destroys no evidence: as a dlt resource hint,
--- and as dbt tests. Enforcement lives in the trust layer, not in the raw source.
---
--- Money is DECIMAL, never FLOAT: these values sum into every revenue metric.
+-- No PRIMARY KEY, FOREIGN KEY, CHECK or NOT NULL constraints, deliberately: each would
+-- reject a planted defect at INSERT time and remove the data-quality issue the dbt tests
+-- exist to catch. Enforcement lives in the trust layer instead.
 
 DROP TABLE IF EXISTS customers;
 CREATE TABLE customers (

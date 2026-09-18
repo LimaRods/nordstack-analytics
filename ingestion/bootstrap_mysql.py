@@ -1,11 +1,7 @@
 """Bootstrap the simulated MySQL billing source from seed_data/*.csv.
 
-This initializes the fictional source system; the analytics ingestion pipeline is
-sync_mysql_to_postgres.py.
-
-Idempotent by replacement: the DDL drops and recreates each table, so running it twice
-leaves 121 / 175 / 2855 rows. Every planted defect is preserved -- the only change
-applied is converting empty CSV strings to NULL for the three nullable columns.
+Idempotent by replacement: the DDL drops and recreates each table. Every planted defect
+is preserved; the only change applied is empty CSV string -> NULL.
 
 Usage:
     python ingestion/bootstrap_mysql.py
@@ -25,7 +21,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SEED_DIR = REPO_ROOT / "seed_data"
 DDL_PATH = Path(__file__).resolve().parent / "ddl" / "mysql_source.sql"
 
-# table -> (csv file, columns in insert order, columns where '' means NULL)
 TABLES = {
     "customers": (
         "raw_customers.csv",
@@ -52,8 +47,6 @@ TABLES = {
     ),
 }
 
-# Row counts including the planted duplicates. The bootstrap must reproduce the
-# source extract exactly, so these are raw row counts, not distinct key counts.
 EXPECTED_ROWS = {"customers": 121, "subscriptions": 175, "invoices": 2855}
 
 log = logging.getLogger("bootstrap_mysql")

@@ -1,7 +1,4 @@
--- One row per subscription. Standardizes format only: the impossible end_date (S00034),
--- the negative price (S00048) and the orphaned customer_id (S00011) all survive intact.
--- They are detected in models/quarantine/ against the source, and the marts decide what
--- to do with each.
+-- One row per subscription. Deduplicated; values left as they arrive.
 
 with source as (
 

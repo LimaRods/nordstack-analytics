@@ -1,12 +1,6 @@
--- Subscriptions the marts may consume, with churn eligibility resolved. Reused by
--- customer_ltv and subscription_churn, which is what earns it a place here.
---
--- Two filters, deliberately distinct:
---   excluded_from_marts -> cannot be attributed or priced at all. Dropped here.
---   unreliable_end_date -> the row is fine but its cancellation date is not. Kept and
---                          flagged, so only the churn mart excludes it. S00034 billed
---                          for 16 months after its supposed cancellation, so its
---                          EUR 3,887 belongs in MRR and LTV.
+-- Subscriptions the marts may consume. Rows that cannot be attributed or priced are
+-- dropped; a row with an untrustworthy end_date is kept and flagged, so only the
+-- churn mart excludes it.
 
 with subscriptions as (
 
@@ -35,7 +29,6 @@ select
 
     coalesce(q.has_invalid_end_date, false) as has_unreliable_end_date,
 
-    -- A cancellation counts as churn only if we can trust when it happened.
     (s.status = 'cancelled'
      and s.end_date is not null
      and not coalesce(q.has_invalid_end_date, false)) as is_churn_eligible

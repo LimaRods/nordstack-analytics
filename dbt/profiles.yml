@@ -1,12 +1,6 @@
-# Nothing here is assigned literally -- every value is read from the environment, so a
-# deployment overrides any setting without editing this file. The fallbacks are the
-# local Docker values from the brief, so `dbt debug` works from a clean clone.
-#
-# `dev` is the default and the only fallback; production selects `prod` explicitly.
-# Only one database exists, so the targets separate by SCHEMA, not by database.
-#
-# dbt auto-loads .env from this directory and its parents, and an already-set variable
-# wins over .env -- so do not `source .env`, which would clobber an explicit target.
+# Every value is read from the environment; the fallbacks are the local Docker values.
+# `dev` is the default and the only fallback. One database only, so the targets separate
+# by schema.
 
 nordstack:
   target: dev

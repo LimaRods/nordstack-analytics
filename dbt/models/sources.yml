@@ -8,9 +8,8 @@ sources:
     schema: raw
     database: analytics
 
-    # Raw tests are diagnostic: warn severity, because the source is expected to be
-    # dirty. Their job is to make the planted defects visible in every build, not to
-    # break it. The published contract is enforced on the marts instead.
+    # Diagnostic only: warn severity, so the planted defects are visible but the build
+    # still runs.
     tables:
 
       - name: customers

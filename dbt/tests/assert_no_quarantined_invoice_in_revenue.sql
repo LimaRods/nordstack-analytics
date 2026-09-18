@@ -1,6 +1,4 @@
--- Mart contract: no quarantined invoice may reach recognised revenue. While this passes,
--- excluded_from_marts is genuinely enforced rather than merely computed.
--- Returns rows only on failure.
+-- Mart contract: while this passes, excluded_from_marts is enforced, not just computed.
 
 select
     r.invoice_id,

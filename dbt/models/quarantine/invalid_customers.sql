@@ -1,10 +1,5 @@
--- Customers breaching at least one data-quality rule, detected against the source.
---
--- One boolean per rule rather than a single reason label: a row can breach several at
--- once and each must stay visible.
---
--- excluded_from_marts is false throughout -- no customer defect justifies withholding
--- real revenue. The marts repair what they need and ignore the rest.
+-- Customers breaching a data-quality rule, detected against the source.
+-- No customer defect is severe enough to withhold the row from the marts.
 
 with source as (
 
@@ -14,8 +9,6 @@ with source as (
 
 flagged as (
 
-    -- One row per business key: the duplicate is reported by the flag, not by emitting
-    -- the offending row twice.
     select distinct on (customer_id)
         customer_id,
         customer_name,

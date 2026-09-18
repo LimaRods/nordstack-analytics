@@ -1,14 +1,9 @@
--- Subscriptions breaching at least one data-quality rule, detected against the source.
---
--- excluded_from_marts separates two populations:
---   true  -> cannot be attributed or priced, so it must not reach any mart
---   false -> usable; one field is suspect and the marts decide what to do
+-- Subscriptions breaching a data-quality rule, detected against the source.
+-- excluded_from_marts is true only where the row cannot be attributed or priced.
 
 with source as (
 
     -- was_duplicated is computed before any join. Computing it afterwards would count
-    -- join fan-out as source duplication: C0023 has two rows in raw.customers, which
-    -- would report its subscriptions as duplicates they are not.
     select
         *,
         count(*) over (partition by subscription_id) > 1 as was_duplicated
@@ -50,8 +45,6 @@ flagged as (
 
 select
     *,
-    -- Only an unattributable or unpriceable subscription is withheld. Casing and a
-    -- corrupt end_date are repairable downstream.
     (has_orphan_customer or has_invalid_price) as excluded_from_marts
 from flagged
 where was_duplicated

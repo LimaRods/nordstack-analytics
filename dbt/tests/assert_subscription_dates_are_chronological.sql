@@ -1,7 +1,6 @@
 {{ config(severity = 'warn') }}
 
--- A subscription cannot end before it starts: such a row places a cancellation in a month
--- preceding its own existence. Expected: S00034, which then billed for 16 more months.
+-- A subscription cannot end before it starts.
 
 select
     subscription_id,

@@ -1,7 +1,6 @@
 name: dbt CI
 
-# Validates a pull request: builds what changed plus everything downstream, against the
-# dev target. Connection settings come from repository variables and secrets.
+# Validates a pull request: builds what changed plus everything downstream, on dev.
 
 on:
   pull_request:
@@ -60,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # the base branch is needed for state comparison
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -70,7 +69,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # dbt cannot read a warehouse that does not exist -- same sequence a reviewer runs.
       - name: Bootstrap MySQL source
         run: python ingestion/bootstrap_mysql.py
 
@@ -82,8 +80,7 @@ jobs:
         run: dbt deps
 
       # State comparison needs a manifest to diff against and real tables to defer to.
-      # With no persistent warehouse, building the base branch provides both. With one,
-      # this step disappears and --state points at the manifest CD publishes.
+      # With a persistent warehouse this step disappears.
       - name: Build baseline from ${{ github.base_ref }}
         env:
           DBT_TARGET: prod
@@ -93,10 +90,8 @@ jobs:
           cd /tmp/baseline/dbt
           dbt build --target-path /tmp/baseline-target
 
-      # The `+` is the downstream part: a changed staging model rebuilds the marts that
-      # consume it, so a break cannot hide behind an untouched consumer. DBT_TARGET is
-      # deliberately unset here -- profiles.yml falls back to dev, so a PR cannot write
-      # to production.
+      # The `+` rebuilds downstream models, so a break cannot hide behind an untouched
+      # consumer. DBT_TARGET stays unset, so a PR cannot write to production.
       - name: Build modified models and their downstream
         working-directory: dbt
         run: |
