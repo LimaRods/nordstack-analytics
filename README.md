@@ -3,8 +3,9 @@
 An analytics layer over a fictional B2B SaaS billing system: MySQL as the operational source,
 dlt for ingestion, PostgreSQL as the warehouse, dbt for modelling, Airflow for orchestration.
 
-> **Status:** ingestion is built and verified. dbt models and the Airflow DAG are in progress.
-> This README records the decisions taken so far and grows as the project does.
+> **Status:** ingestion, the full dbt project (staging, quarantine, intermediate, marts) and the
+> dbt CI/CD workflows are built and verified. The Airflow DAG is next.
+> Repository: <https://github.com/LimaRods/nordstack-analytics>
 
 ---
 
@@ -127,7 +128,36 @@ every run — marking all 3,151 rows as modified every 5 minutes and destroying 
 the idempotency check depends on. Real change tracking is dlt's `merge` + `strategy="scd2"`
 (`_dlt_valid_from` / `_dlt_valid_to`), which earns its place only once the source mutates.
 
-### 5. Money as `DECIMAL`, never `FLOAT`
+### 5. Quarantine reads the source, so staging is free to standardize
+
+The layers went through two revisions before settling, and the final shape is the point:
+
+| Layer | Role |
+|---|---|
+| `raw` | faithful mirror, defects included |
+| `quarantine` | detects defects **from the source**, independent of staging |
+| `staging` | standardizes format, guarantees grain, repairs nothing |
+| `marts` | repairs, filters, decides |
+
+The first attempt had quarantine read *from staging*, which forced a false choice: normalizing
+`'PAID '` to `'paid'` made the defect undetectable, but leaving it raw meant every downstream
+filter had to remember `lower(trim(status))` or silently drop €29 of revenue.
+
+Pointing quarantine at the source dissolves it. The same invoice now reads `paid` in staging and
+`PAID ` in quarantine, simultaneously — usable *and* auditable. Normalizing and preserving
+stopped being mutually exclusive.
+
+The line drawn: **standardize format, never substitute values.** Casing, whitespace and types are
+reversible and lose no information, so they belong in staging. Inventing a value the source never
+had — a blank country becoming `UNKNOWN`, nulling `S00034`'s impossible date — is a business
+decision, so it belongs in the mart that needs it.
+
+One consequence: rejection reasons are **one boolean per rule**, not a single label. A row can
+breach several rules at once — `I000725`–`I000731` are both non-positive *and* children of a
+quarantined subscription — and a single `invalid_reason` string reported the first match and
+silently dropped the rest.
+
+### 6. Money as `DECIMAL`, never `FLOAT`
 
 `monthly_price` and `amount` are `DECIMAL(10,2)` in MySQL and arrive as `numeric(10,2)` in
 Postgres. Binary floats cannot represent 29.00 / 99.00 / 299.00 exactly, and these values sum
@@ -144,12 +174,12 @@ MySQL, and in Postgres — no drift.
 
 | # | Issue | Example | Handling | Test that catches it |
 |---|---|---|---|---|
-| D1, D5 | Duplicate primary key (rows byte-identical) | `C0023`, `S00006` | deduplicate in staging — lossless, no conflicting values | `unique` + `not_null` |
-| D2 | Blank `country` | `C0008` | normalize to `UNKNOWN`, keep row | `not_null` after normalization |
-| D3 | Malformed `email` | `C0016` = `not-an-email` | flag, keep row — feeds no mart | warn-level singular test |
-| D4 | `created_at` in the future, after its own subscription | `C0041` (2027-03-15) | flag, keep row | warn-level date test |
-| D6, D10 | Orphan foreign key | `S00011`→`C9999`, `I000601`→`S99999` | **quarantine** | `relationships` |
-| D7, D13 | Casing / trailing whitespace | `'ACTIVE'`, `'PAID '` | normalize `lower(trim(...))` **before** filtering | `accepted_values` |
+| D1, D5 | Duplicate primary key (rows byte-identical) | `C0023`, `S00006` | deduplicate in staging — a duplicate is a *grain* problem, not formatting, and the rows are identical so it is lossless | `unique` on the source |
+| D2 | Blank `country` | `C0008` | staging leaves it `NULL`; the LTV mart `COALESCE`s it to `UNKNOWN` | singular test |
+| D3 | Malformed `email` | `C0016` = `not-an-email` | flag only — feeds no mart | singular test |
+| D4 | `created_at` in the future, after its own subscription | `C0041` (2027-03-15) | flag only | singular test |
+| D6, D10 | Orphan foreign key | `S00011`→`C9999`, `I000601`→`S99999` | **quarantine**, excluded from marts | `relationships` |
+| D7, D13 | Casing / trailing whitespace | `'ACTIVE'`, `'PAID '` | standardized in staging, so no consumer has to remember `lower(trim(...))` | `accepted_values` |
 | D8 | `end_date` before `start_date`, still billing 16 months | `S00034` | null the date, exclude from **churn only** — keep its €3,887 of paid revenue | **singular test B** |
 | D9, D12 | Negative money | `S00048`, `I000725`–`I000731` | **quarantine** | **singular test A** |
 | D11 | `paid` invoice with null `amount` | `I000322` | **quarantine** — do not impute | **singular test A** |
@@ -161,8 +191,14 @@ Three defects had no single defensible reading and were decided explicitly — `
 and convert), and `I000322` (quarantine rather than invent €99 of revenue). The reasoning for
 each is in [DISCOVERY.md §5](DISCOVERY.md).
 
-**Quarantine is a model, not a `WHERE` clause.** Rejected rows land in `invalid_*` models with
-their rejection reason, so "what happened to the bad records?" is answerable with a query.
+**Quarantine is a model, not a `WHERE` clause.** Every defect lands in an `invalid_*` model with
+**one boolean per rule breached**, so "what happened to the bad records?" is answerable with a
+query — and a row breaching three rules reports all three. `excluded_from_marts` separates rows
+withheld from revenue from rows merely repaired: `I000451`'s casing was fixed, but its €29 is
+real and still counts.
+
+All 13 defects are traceable there. Verified: 4 customers, 5 subscriptions, 20 invoices, of
+which 19 are excluded from revenue.
 
 ---
 
@@ -190,13 +226,86 @@ duplicated in equal measure. The distinct-key check is what would catch a regres
 Fails before touching the database if a CSV or the DDL is missing; asserts exact row counts
 after loading; rolls back and exits non-zero on any error.
 
-### dbt (Phase 5 — in progress)
+### dbt
 
-Generic tests (`unique`, `not_null`, `relationships`, `accepted_values`) plus two singular tests
-encoding billing invariants: **(A)** no `paid` invoice has a null or non-positive amount, and
-**(B)** `end_date` never precedes `start_date`. Raw-layer tests run at warn severity so planted
-defects stay visible; staging and marts run at error severity so `dbt build` fails if bad data
-reaches the trusted layer.
+Severity encodes **where the contract applies**:
+
+| Layer | Severity | Why |
+|---|---|---|
+| raw sources | **warn** | the source is expected to be dirty. These tests exist to make the planted defects visible in every build, never to block it |
+| staging | *none* | it standardizes format and asserts nothing. Testing it would restate the raw tests against a copy of the same rows |
+| marts | **error** | the published contract. A failure means bad data escaped quarantine |
+
+20 tests on raw, of which **12 fire on every build** — one per planted defect, except singular
+test A which catches two at once (D11 + D12, `WARN 6`).
+
+Five singular tests run against raw at warn severity: paid-amount validity, date chronology,
+positive price, email format, and non-future signup. Three run against the marts at error
+severity:
+
+- **`assert_no_quarantined_invoice_in_revenue`** — joins the revenue base against quarantine.
+  While it passes, `excluded_from_marts` is genuinely *enforced* rather than merely computed.
+- **`assert_mart_revenue_reconciles_to_source`** — `fct_mrr` and `customer_ltv` aggregate the
+  same base along different axes, so their totals must agree. A divergence means a join fanned
+  out — a bug neither mart would reveal alone.
+- **`assert_mart_amounts_are_non_negative`** — nothing published may be negative.
+
+The build is green *because defects are quarantined upstream*, not because tests were weakened.
+Running the same rules without the accepted-set filter returns exactly the 6 / 1 / 1 rows
+DISCOVERY.md predicted.
+
+---
+
+## CI/CD
+
+Two workflows, dbt only. Both read every connection setting from repository variables and
+secrets — see [CONNECTION_DETAILS.md](CONNECTION_DETAILS.md).
+
+| Workflow | Trigger | Builds | Target |
+|---|---|---|---|
+| [`dbt-ci.yml`](.github/workflows/dbt-ci.yml) | pull request | `state:modified+` | `dev` |
+| [`dbt-cd.yml`](.github/workflows/dbt-cd.yml) | merge to `main`, or manual | everything | `prod` |
+
+**CI is component-aware twice over.** It only runs when `dbt/`, `ingestion/` or `seed_data/`
+change — an Airflow-only commit builds no warehouse. Within that, `state:modified+` selects the
+changed models *plus everything downstream*: the `+` is what stops a break hiding behind an
+untouched consumer. Verified on a real PR — editing `stg_invoices` rebuilt
+`int_paid_invoices_eur` → `fct_mrr` + `customer_ltv` and their tests, while `subscription_churn`
+and the quarantine models were correctly skipped.
+
+**CD builds everything, deliberately.** A deployment must leave production internally consistent
+and every test must pass against what is *published*, not only against what changed in that
+commit. It publishes `manifest.json` as an artifact.
+
+`DBT_TARGET` is set to `prod` in exactly one place: the CD workflow. CI leaves it unset, so
+`profiles.yml` falls back to `dev` and a pull request can never write to production.
+
+### The honest cost of Slim CI here
+
+`--defer --state` needs two things: a manifest to diff against, and **real tables** for the
+unmodified models to resolve to. A company has both — CI points at a warehouse that already
+exists. A GitHub runner has neither: it is ephemeral, the service containers start empty, and
+nothing survives the job.
+
+So CI bootstraps MySQL from the CSVs, syncs to Postgres, *then* builds the base branch to have
+something to defer to. Measured on a real run:
+
+```
+58s  start service containers     ← unavoidable
+23s  install dependencies         ← unavoidable
+ 5s  dlt sync
+ 5s  build baseline from main     ← exists only because there is no persistent warehouse
+ 5s  build modified + downstream
+```
+
+**dbt is 10 seconds of a 1m51s run, and the full build is 5 seconds.** Selective building costs
+more than it saves at this scale, and because CI rebuilds the whole warehouse from CSVs anyway,
+the full cost is already paid before dbt starts.
+
+Kept as-is deliberately: it demonstrates the pattern, and the substitution is documented rather
+than hidden. With a persistent warehouse the baseline step simply disappears and `--state` points
+at the `prod-manifest` artifact CD already publishes — a one-step change, not a redesign. Slim CI
+pays for itself when a full build takes 40 minutes; here it takes 5 seconds.
 
 ---
 
@@ -206,7 +315,11 @@ reaches the trusted layer.
 |---|---|
 | Bootstrap, run twice | 121 / 175 / 2855 both times |
 | dlt sync, run twice | identical counts, `1 duplicate row preserved` on two tables |
-| All 12 planted defects in `raw` | survived end-to-end, including `[PAID ]` with its trailing space |
+| All 13 planted defects | survived into `raw`, and every one is traceable in quarantine |
+| `fct_mrr` vs `customer_ltv` | both €322,890.01 — reconciles to the source to the cent |
+| Churn coverage | 49 of 52 cancellations; the 3 excluded are documented |
+| CI on a real PR | built only the invoice lineage, skipped `subscription_churn` |
+| CD on `main` | full build against `prod`, manifest and docs published |
 | `SUM(amount)` across CSV → MySQL → Postgres | `382850.00`, no floating-point drift |
 | Types preserved | `numeric(10,2)` and `date` carried through from MySQL |
 
@@ -222,7 +335,12 @@ Deliberately deferred — the current dataset does not justify them:
 - **SCD2 (`_dlt_valid_from` / `_dlt_valid_to`)**, once the source actually mutates.
 - **CDC from MySQL**, replacing scheduled full extraction.
 - **Dated historical FX rates**, replacing the static mapping.
-- **Slim CI** (`state:modified+` with deferral), which needs a production manifest to defer to —
-  none exists in a take-home with no deployment target.
+- **Slim CI without the baseline build.** `state:modified+` is implemented, but CI has to build
+  the base branch first because the runner has no persistent warehouse to defer to. With one,
+  that step disappears and `--state` points at the `prod-manifest` CD already publishes. Worth
+  doing when a full build stops taking 5 seconds.
+- **A JSONB array of breached rules** in quarantine, replacing one boolean column per rule.
+  Booleans compose correctly, which was the important fix; the array is about not adding a
+  column every time a rule is added.
 - Postgres indexing and partitioning, a real staging environment, richer observability,
   production secrets management, RBAC, and infrastructure as code.
