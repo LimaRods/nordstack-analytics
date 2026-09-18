@@ -1,4 +1,5 @@
 -- One row per monthly invoice. The revenue grain for every mart.
+-- (CI selector check: this edit should rebuild the invoice lineage, nothing else.)
 --
 -- Standardizes format only. No deduplication needed -- invoice_id is unique at source.
 --
