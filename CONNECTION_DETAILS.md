@@ -14,7 +14,7 @@ Everything needed to connect to the project's services from a GUI client or the 
 Both databases run as Docker containers. Nothing is installed on macOS directly.
 
 ```bash
-cd "/Users/rodolfo/Desktop/Projects/Data-Engineering Projects/DE-Assessment "
+cd /path/to/DE-Assessment
 docker compose up -d
 docker compose ps          # both must show "healthy" before connecting
 ```
