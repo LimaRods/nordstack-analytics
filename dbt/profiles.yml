@@ -1,24 +1,12 @@
-# Committed on purpose: nothing here is assigned literally -- every value is read
-# from the environment via env_var(), so the project is reproducible from a clean
-# clone and a deployment can override any setting without editing this file.
+# Nothing here is assigned literally -- every value is read from the environment, so a
+# deployment overrides any setting without editing this file. The fallbacks are the
+# local Docker values from the brief, so `dbt debug` works from a clean clone.
 #
-# The fallbacks are the local-development values published in CANDIDATE_BRIEF.md
-# for a throwaway Docker stack. They exist so `dbt debug` works immediately after
-# `docker compose up -d`, which the brief's "reproducible from a clean clone"
-# requirement depends on. In a real deployment these variables are supplied by the
-# environment and the fallbacks are never reached; production credentials would
-# come from a secrets manager (see Next Steps in the README).
+# `dev` is the default and the only fallback; production selects `prod` explicitly.
+# Only one database exists, so the targets separate by SCHEMA, not by database.
 #
-# `dev` is the default and the ONLY fallback target. Production selects `prod`
-# explicitly through its deployment environment -- see CLAUDE.md section 7. A missing
-# DBT_TARGET therefore degrades to a local schema, never to production.
-#
-# Only one database (`analytics`) exists, so the targets separate by SCHEMA, not by
-# database. dev and prod are otherwise identical and must stay that way.
-#
-# Note: dbt auto-loads .env from this directory and its parents, and a variable
-# already set in the environment wins over .env. Do not `source .env` -- that
-# assigns unconditionally and would clobber an explicit DBT_TARGET=prod.
+# dbt auto-loads .env from this directory and its parents, and an already-set variable
+# wins over .env -- so do not `source .env`, which would clobber an explicit target.
 
 nordstack:
   target: dev
@@ -29,7 +17,7 @@ nordstack:
       host: "{{ env_var('POSTGRES_HOST') }}"
       port: "{{ env_var('POSTGRES_PORT') | int }}"
       user: "{{ env_var('POSTGRES_USER') }}"
-      password: "{{ env_var('POSTGRES_PASSWORD', 'dbt_password') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
       dbname: "{{ env_var('POSTGRES_DB', 'analytics') }}"
       schema: dev
       threads: 4

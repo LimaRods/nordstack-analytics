@@ -1,16 +1,8 @@
-"""Email notifications for the NordStack pipeline.
+"""Email notifications for the pipeline.
 
-Airflow's own SMTP configuration lives in airflow.cfg, which is machine state rather
-than repository state. Sending directly through smtplib keeps the whole notification
-path in version control and configured by environment variables, so the same DAG
-behaves identically on a laptop and on a worker.
-
-Credentials are never in source. Required environment:
-
-    SMTP_USER              account that authenticates and appears as the sender
-    SMTP_PASSWORD          Gmail app password (NOT the account password)
-    ALERT_EMAIL_TO         comma-separated recipients
-    SMTP_HOST, SMTP_PORT   optional, default smtp.gmail.com:587
+Sending goes through smtplib with credentials from the environment, so the whole
+notification path stays in version control rather than in airflow.cfg. A missing
+mailbox is logged, never raised -- see _send.
 """
 
 from __future__ import annotations
@@ -21,6 +13,8 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from nordstack.config import resolve_dbt_target
+
 log = logging.getLogger(__name__)
 
 
@@ -30,13 +24,13 @@ def _recipients() -> list[str]:
 
 
 def _send(subject: str, html: str) -> None:
-    """Send one message. Never raises -- see the callers for why."""
+    """Send one message. Never raises."""
     user = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASSWORD")
     recipients = _recipients()
 
-    # A missing mailbox is a configuration problem, not a data problem. Log it and
-    # return: failing here would mask the pipeline error the email was reporting.
+    # A missing mailbox is a configuration problem, not a data one: failing here would
+    # mask the pipeline error the email was reporting.
     if not (user and password and recipients):
         log.warning(
             "Email not sent -- SMTP_USER, SMTP_PASSWORD or ALERT_EMAIL_TO is unset. "
@@ -62,10 +56,8 @@ def _send(subject: str, html: str) -> None:
             smtp.sendmail(user, recipients, message.as_string())
         log.info("Notification sent to %s", ", ".join(recipients))
     except Exception:
-        # Swallowed deliberately, and ONLY here. A callback that raises marks the DAG
-        # run failed for a reason unrelated to the data, and a failure callback that
-        # raises can hide the original failure entirely. The exception is logged in
-        # full so it stays diagnosable.
+        # Swallowed deliberately, and only here: a failure callback that raises would
+        # hide the original failure. Logged in full so it stays diagnosable.
         log.exception("Failed to send notification: %s", subject)
 
 
@@ -76,7 +68,7 @@ def _context_rows(context: dict) -> str:
         "DAG": context.get("dag").dag_id if context.get("dag") else "unknown",
         "Run": getattr(dag_run, "run_id", "unknown"),
         "Logical date": str(context.get("logical_date") or context.get("execution_date")),
-        "Target": os.environ.get("DBT_TARGET", "dev"),
+        "Target": resolve_dbt_target(context),
     }
     if task_instance is not None:
         rows["Failed task"] = task_instance.task_id
