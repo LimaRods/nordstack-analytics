@@ -1,0 +1,129 @@
+name: dbt CD
+
+# Promotes the dbt project to production on merge to main: a full build against the
+# PROD target, followed by the docs and the manifest that CI defers to.
+#
+# Honest scoping: "production" here is whatever POSTGRES_* points at. In this
+# assessment that is an ephemeral service container, so the run proves the promotion
+# is correct rather than persisting it. Pointing the same workflow at a real
+# warehouse is a change to repository variables, not to this file -- which is the
+# property worth demonstrating.
+#
+# Run manually with workflow_dispatch to redeploy without a new merge.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dbt/**'
+      - 'ingestion/**'
+      - 'seed_data/**'
+      - '.github/workflows/dbt-cd.yml'
+  workflow_dispatch:
+
+# Never let two deployments touch the same warehouse at once, and never cancel one
+# midway -- a half-applied deployment is worse than a queued one.
+concurrency:
+  group: dbt-cd-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+        ports:
+          - ${{ vars.POSTGRES_PORT }}:5432
+        options: >-
+          --health-cmd "pg_isready"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ vars.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        ports:
+          - ${{ vars.MYSQL_PORT }}:3306
+        options: >-
+          --health-cmd "mysqladmin ping --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+
+    env:
+      MYSQL_HOST: ${{ vars.MYSQL_HOST }}
+      MYSQL_PORT: ${{ vars.MYSQL_PORT }}
+      MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
+      MYSQL_USER: ${{ vars.MYSQL_USER }}
+      MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+      POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
+      POSTGRES_PORT: ${{ vars.POSTGRES_PORT }}
+      POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+      POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      # The one place prod is selected. Everywhere else falls back to dev.
+      DBT_TARGET: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Bootstrap MySQL source
+        run: python ingestion/bootstrap_mysql.py
+
+      - name: Sync MySQL -> PostgreSQL raw
+        run: python ingestion/sync_mysql_to_postgres.py
+
+      - name: dbt deps
+        working-directory: dbt
+        run: dbt deps
+
+      - name: Confirm the prod target is selected
+        working-directory: dbt
+        run: dbt debug --target prod
+
+      # Full build, not state:modified+. A deployment must leave production
+      # internally consistent, and every test must pass against what is published
+      # -- not only against what happened to change in this commit.
+      - name: Deploy models to production
+        working-directory: dbt
+        run: dbt build --target prod
+
+      - name: Generate documentation
+        working-directory: dbt
+        run: dbt docs generate --target prod
+
+      # This manifest is the production state. CI defers to an artifact like this
+      # once a persistent warehouse exists, replacing its baseline-build step.
+      - name: Publish production manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-manifest
+          path: |
+            dbt/target/manifest.json
+            dbt/target/run_results.json
+          retention-days: 90
+
+      - name: Publish documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs
+          path: |
+            dbt/target/index.html
+            dbt/target/manifest.json
+            dbt/target/catalog.json
+          retention-days: 30
