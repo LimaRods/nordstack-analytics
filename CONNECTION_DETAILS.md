@@ -132,10 +132,47 @@ database and separate by **schema**, since only one database exists.
 
 _To document: profile name, target schemas, `dbt debug` command._
 
-### Airflow (Phase 12)
+### Airflow
 
-_To document: webserver URL and port, admin credentials, SMTP settings for the
-success/failure email, and the Airflow Connection IDs used by the DAG._
+`AIRFLOW_HOME` points at `./airflow` (set in `.env`) so the DAG folder is version
+controlled instead of living in `~/airflow`. Runtime state — `airflow.db`, `airflow.cfg`,
+`logs/` — is git-ignored.
+
+```bash
+export AIRFLOW_HOME="$PWD/airflow"
+export AIRFLOW__CORE__LOAD_EXAMPLES=False
+source .env
+
+venv/bin/airflow db migrate          # once
+venv/bin/airflow standalone          # UI on http://localhost:8080
+```
+
+`standalone` prints a generated admin password on first run and writes it to
+`airflow/simple_auth_manager_passwords.json.generated` (git-ignored).
+
+Test without the scheduler:
+
+```bash
+venv/bin/airflow dags test nordstack_analytics             # whole DAG, fires callbacks
+venv/bin/airflow tasks test nordstack_analytics dbt_build  # one task
+```
+
+#### Email notifications
+
+Set in `.env`, never committed. Gmail requires an **app password** (Google Account →
+Security → 2-Step Verification → App passwords), not the account password.
+
+| Variable | Purpose |
+|---|---|
+| `SMTP_HOST` / `SMTP_PORT` | `smtp.gmail.com` / `587` |
+| `SMTP_USER` | account that authenticates and appears as sender |
+| `SMTP_PASSWORD` | 16-character app password |
+| `ALERT_EMAIL_TO` | comma-separated recipients |
+
+The DAG sends through `smtplib` rather than Airflow's SMTP configuration, so the whole
+notification path is in the repository rather than in machine-local `airflow.cfg`. If
+these are unset the callback logs a warning and returns — a failure callback that itself
+fails would hide the error it was reporting.
 
 ---
 

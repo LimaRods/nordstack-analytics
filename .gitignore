@@ -34,3 +34,9 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# Airflow runtime state (AIRFLOW_HOME=./airflow). The dags/ folder IS committed.
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/logs/
+airflow/simple_auth_manager_passwords.json.generated

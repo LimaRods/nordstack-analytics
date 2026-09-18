@@ -3,8 +3,8 @@
 An analytics layer over a fictional B2B SaaS billing system: MySQL as the operational source,
 dlt for ingestion, PostgreSQL as the warehouse, dbt for modelling, Airflow for orchestration.
 
-> **Status:** ingestion, the full dbt project (staging, quarantine, intermediate, marts) and the
-> dbt CI/CD workflows are built and verified. The Airflow DAG is next.
+> **Status:** complete. Ingestion, the dbt project (staging, quarantine, intermediate, marts),
+> the dbt CI/CD workflows and the Airflow DAG are all built and verified.
 > Repository: <https://github.com/LimaRods/nordstack-analytics>
 
 ---
@@ -309,6 +309,53 @@ pays for itself when a full build takes 40 minutes; here it takes 5 seconds.
 
 ---
 
+## Orchestration
+
+One DAG, [`nordstack_analytics`](airflow/dags/nordstack_analytics.py), on the five-minute
+schedule the brief asks for, emailing on both success and failure.
+
+```
+dlt_sync  ->  validate_raw  ->  dbt_build  ->  email (success or failure)
+```
+
+**Three tasks rather than one script, deliberately.** A failure names itself: a red `dlt_sync`
+is an ingestion problem, a red `validate_raw` means ingestion *reported* success while the
+warehouse disagrees, and a red `dbt_build` is a modelling or data-quality problem. Airflow also
+retries only the task that failed instead of redoing work that already succeeded.
+
+| Setting | Value | Why |
+|---|---|---|
+| `schedule` | `*/5 * * * *` | required by the brief |
+| `catchup` | `False` | nothing is gained by backfilling five-minute intervals |
+| `max_active_runs` | `1` | two runs replacing the same tables would race each other |
+| `retries` | `2`, 30s apart | recovers a dropped connection; a broken model fails identically every time and should surface, not spin |
+| `execution_timeout` | 4 min/task | a task outliving the interval is stuck, not slow |
+| `dagrun_timeout` | 4 min | under the interval, so a stuck run cannot pile up |
+| `sla` | 2/3/4 min per task | lateness is the first symptom of runs about to overlap |
+
+**Retries are safe because every task is idempotent.** dlt uses `replace` (reloads, never
+appends), `validate_raw` only reads, and dbt rebuilds in full. That is what makes retries a
+recovery mechanism rather than a duplication risk.
+
+**Notifications are separated by meaning.** Success and failure emails fire on the DAG run —
+failure *after retries are exhausted*, not on every attempt, since an alert that fires on
+recoverable errors trains people to ignore it. SLA misses get their own callback: a late run is
+not a broken one. Sending goes through `smtplib` with credentials from the environment, so the
+whole notification path is in version control rather than in `airflow.cfg`.
+
+**The trap worth naming:** `PythonOperator` marks a task successful unless the callable
+*raises*. Both ingestion scripts are CLIs whose `main()` **returns** an exit code, so calling
+them directly would report a failed load as a green task. The `_run()` adapter converts the exit
+code into an exception. Verified by pointing `MYSQL_HOST` at a dead host and confirming the task
+goes red.
+
+**`validate_raw` repeats a check the sync script already does**, on purpose. A loader that
+reports success while leaving the warehouse wrong is exactly the failure a self-check cannot
+catch. Verified by deleting a row from `raw.customers` and confirming the task fails with
+`121 rows at source, 120 in raw`.
+
+---
+
 ## Verified so far
 
 | | Result |
@@ -320,6 +367,8 @@ pays for itself when a full build takes 40 minutes; here it takes 5 seconds.
 | Churn coverage | 49 of 52 cancellations; the 3 excluded are documented |
 | CI on a real PR | built only the invoice lineage, skipped `subscription_churn` |
 | CD on `main` | full build against `prod`, manifest and docs published |
+| Airflow DAG, end to end | `state=success` in 6.4s, success email delivered |
+| DAG failure paths | dead MySQL host and a corrupted `raw` both turn the task red |
 | `SUM(amount)` across CSV → MySQL → Postgres | `382850.00`, no floating-point drift |
 | Types preserved | `numeric(10,2)` and `date` carried through from MySQL |
 
@@ -339,6 +388,11 @@ Deliberately deferred — the current dataset does not justify them:
   the base branch first because the runner has no persistent warehouse to defer to. With one,
   that step disappears and `--state` points at the `prod-manifest` CD already publishes. Worth
   doing when a full build stops taking 5 seconds.
+- **CI/CD for Airflow, and end-to-end rather than dbt-only.** Today only the dbt project is
+  covered. With more time: validate that every DAG imports, assert the DAG id, schedule,
+  `catchup=False` and task dependencies in a unit test, and run the ingestion scripts against
+  throwaway services on every PR — then promote the DAGs to the scheduler on merge the way
+  `dbt-cd.yml` promotes the models.
 - **A JSONB array of breached rules** in quarantine, replacing one boolean column per rule.
   Booleans compose correctly, which was the important fix; the array is about not adding a
   column every time a rule is added.
