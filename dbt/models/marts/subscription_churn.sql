@@ -30,6 +30,8 @@ select
     count(*)                               as cancelled_subscriptions,
     count(distinct customer_id)            as churned_customers,
     sum(monthly_price)                     as mrr_lost_eur,
+    sum(monthly_price * 2)                     as mrr_lost_eur_double,
+
 
     (date_trunc('month', end_date)::date > current_date) as is_future_cancellation
 
