@@ -7,18 +7,16 @@ seed_data/*.csv  →  MySQL  →  dlt  →  PostgreSQL raw  →  dbt  →  marts
 ```
 
 The CSVs initialize a simulated billing source in MySQL. dlt syncs MySQL into the
-PostgreSQL `raw` schema. dbt turns raw billing data into three trusted marts — MRR,
-customer LTV, and churn. Airflow runs the whole thing on a schedule; GitHub Actions
-validates changes before merge.
+PostgreSQL `raw` schema. dbt builds three marts from it: MRR, customer LTV and churn.
+Airflow runs the pipeline on a schedule. GitHub Actions validates changes before merge.
 
-Getting a pipeline to produce numbers is the easy half. The decisions worth discussing
-are about the second run, the retry, the bad source record, and the change that looks
-harmless — repeated execution has to be safe, failures visible and contained,
-environments separate, and quality rules enforceable rather than aspirational.
+Building a pipeline that produces numbers is not the hard part. The hard part is making
+it safe to run twice, making failures visible, keeping environments apart, and enforcing
+data quality where it belongs. Most of the decisions below are about that.
 
-This is a small environment: 3,151 rows across three tables. The implementation stays
-simple on purpose, and the sections below separate what is built from how it would
-evolve under real volume.
+The dataset is small: 3,151 rows in three tables. The implementation stays simple
+because of that, and each section separates what is built from what would change at real
+volume.
 
 ---
 
@@ -55,8 +53,7 @@ evolve under real volume.
          MRR     LTV    Churn
 ```
 
-**Quarantine is built from raw, not from staging.** Both branches read the source
-independently:
+Quarantine is built from raw, not from staging. Both branches read the source:
 
 ```
 raw
@@ -64,9 +61,9 @@ raw
  └── accepted rows → staging → intermediate → marts
 ```
 
-That ordering is what lets staging normalize freely. Detection happens against the
-source, so the audit trail does not depend on what staging did first — and a normalized
-`'PAID '` can't quietly clear a row of the checks it should have failed.
+This is what lets staging normalize freely. Detection runs against the source, so the
+audit trail does not depend on what staging did first. If quarantine read staging
+instead, a cleaned `'PAID '` would already look valid and the defect would disappear.
 
 ---
 
@@ -88,77 +85,68 @@ dbt build                                    # models + tests, dev target
 dbt docs generate && dbt docs serve
 ```
 
-Both ingestion scripts are safe to re-run: counts stay at 121 / 175 / 2,855.
+Both ingestion scripts are safe to re-run. Counts stay at 121 / 175 / 2,855.
 
 Airflow:
 
 ```bash
 export AIRFLOW_HOME="$(pwd)/airflow"
-airflow standalone                                   # UI on :8080
-airflow dags test nordstack_analytics                # one full run, no scheduler
+airflow standalone                           # UI on :8080
+airflow dags test nordstack_analytics        # one full run, no scheduler
 ```
 
-Connection details for every service: [CONNECTION_DETAILS.md](CONNECTION_DETAILS.md).
+Connection details: [CONNECTION_DETAILS.md](CONNECTION_DETAILS.md).
 
 ---
 
 ## Why MySQL → dlt → PostgreSQL
 
-The brief allows seeding Postgres directly. I took the optional MySQL path because
-seeding skips the part that carries risk — crossing a source-to-warehouse boundary
-repeatedly, on a schedule, without corrupting the destination. `dbt seed` exercises
-nothing about idempotency, retry safety or source fidelity.
+The brief allows loading the CSVs straight into Postgres. I took the optional MySQL path
+because seeding skips the part that carries risk: crossing a source-to-warehouse
+boundary repeatedly, on a schedule, without corrupting the destination. `dbt seed` says
+nothing about idempotency, retries or source fidelity.
 
-MySQL plays the operational billing system; Postgres is the analytical destination.
+MySQL plays the operational billing system. Postgres is the analytical destination.
 
 ### `replace`, not `merge`
 
-dlt's merge deduplicates on the primary key before writing
-(`ROW_NUMBER() OVER (PARTITION BY ...)`). The source contains two deliberately planted
-duplicates, `C0023` and `S00006`. Merge would collapse them during ingestion and land
-120/174 rows instead of 121/175 — quietly fixing data the assignment asks the tests to
-catch.
+dlt's merge deduplicates on the primary key before writing. The source has two planted
+duplicates, `C0023` and `S00006`, so merge would collapse them during ingestion and load
+120/174 rows instead of 121/175. That fixes the data quietly and removes the defect the
+tests are supposed to catch.
 
-`replace` reloads rather than appends, so repeated runs and Airflow retries converge on
-the same row counts. Deduplication moves to dbt staging, where it is visible and tested.
+`replace` reloads instead of appending, so repeated runs and Airflow retries end at the
+same row counts. Deduplication moves to dbt staging, where it is visible and tested.
 
-The business key is still declared as a resource hint: dlt maps only the `unique` hint to
-a Postgres constraint, so `primary_key` documents the key without emitting one that would
-reject the duplicates.
+The business key is still declared as a dlt resource hint. dlt only turns the `unique`
+hint into a Postgres constraint, so `primary_key` documents the key without rejecting the
+duplicates.
 
-This is right for a small static dataset, not a general rule:
-
-| | Strategy |
-|---|---|
-| Small, static, defects must survive | `replace` — simple, deterministic |
-| Large, changing, reliable business keys | `merge` / upsert, then CDC |
-
-In a real transactional source I would expect keys and constraints to be part of the
-data model rather than something the warehouse discovers.
+This is the right choice for this dataset, not a general rule. See Next steps.
 
 ---
 
 ## Data quality
 
-The source ships with planted defects. The design question is not how to clean them —
-it's where each kind of failure belongs.
+The source ships with planted defects. The question is not how to clean them. It is
+where each type of problem belongs.
 
 ```
-source defect              → warn      (raw tests: visible in every build, never block it)
-known-invalid record       → quarantine (isolated from raw, before staging)
-trusted contract violated  → error     (mart tests: fail the build)
+source defect              → warn        raw tests, visible in every build, never block it
+known-invalid record       → quarantine  isolated from raw, before staging
+trusted contract violated  → error       mart tests, fail the build
 ```
 
-**Raw tests warn.** Raw shows what arrived; cleaning it so tests pass would destroy the
-evidence. Twelve fire on every build.
+**Raw tests warn.** Raw shows what arrived. Cleaning it so the tests pass would destroy
+the evidence. Twelve warnings fire on every build.
 
-**Quarantine isolates.** Each `invalid_*` model carries one boolean per rule breached
-rather than a single reason label, so a row failing three rules reports all three.
-`excluded_from_marts` separates rows withheld from revenue from rows that are merely
-untidy — `I000451`'s casing is wrong, but its €29 is real and still counts.
+**Quarantine isolates.** Each `invalid_*` model has one boolean per rule breached, not a
+single reason column, so a row that breaks three rules reports all three.
+`excluded_from_marts` separates rows kept out of revenue from rows that are only untidy.
+`I000451` has bad casing, but its €29 is real and still counts.
 
-**Marts fail.** There, a failure means bad data escaped quarantine and reached a
-consumer.
+**Marts fail the build.** A failure there means bad data got past quarantine and reached
+a consumer.
 
 The build is green because defects are quarantined upstream, not because tests were
 weakened: 40 pass, 12 warn, 0 errors.
@@ -167,69 +155,68 @@ weakened: 40 pass, 12 warn, 0 errors.
 
 | Issue | Example | Handling |
 |---|---|---|
-| Duplicate business key | `C0023`, `S00006` | deduplicated in staging — rows are byte-identical, so it's lossless |
+| Duplicate business key | `C0023`, `S00006` | deduplicated in staging; the rows are identical, so nothing is lost |
 | Orphan foreign key | `S00011`→`C9999`, `I000601`→`S99999` | quarantined, excluded from marts |
 | Negative money | `S00048` (−99.00) and its 7 invoices | quarantined, excluded |
-| Paid invoice, null amount | `I000322` | quarantined — not imputed |
-| `end_date` before `start_date` | `S00034` | kept, flagged; excluded from **churn only** |
-| Casing / trailing whitespace | `'ACTIVE'`, `'PAID '` | normalized in staging |
-| Blank country | `C0008` | stays NULL in staging; LTV mart reports `UNKNOWN` |
-| Malformed email | `C0016` | flagged only — feeds no mart |
+| Paid invoice with null amount | `I000322` | quarantined, not imputed |
+| `end_date` before `start_date` | `S00034` | kept and flagged, excluded from churn only |
+| Casing and trailing whitespace | `'ACTIVE'`, `'PAID '` | normalized in staging |
+| Blank country | `C0008` | stays NULL in staging, reported as `UNKNOWN` in the LTV mart |
+| Malformed email | `C0016` | flagged only, feeds no mart |
 | Future `created_at` | `C0041` (2027) | flagged only |
-| Non-EUR currency | 2 SEK invoices | converted at a static rate (below) |
+| Non-EUR currency | 2 SEK invoices | converted with a static rate |
 
-Quarantine holds 4 customers, 5 subscriptions and 20 invoices; 19 invoices and 2
-subscriptions are withheld from the marts.
+Quarantine holds 4 customers, 5 subscriptions and 20 invoices. 19 invoices and 2
+subscriptions are kept out of the marts.
 
-Three cases had no obvious right answer and were decided explicitly:
+Three cases had no obvious answer, so I decided them explicitly:
 
-- **`S00034`** — its `end_date` precedes its `start_date`, yet it kept billing for 16
-  months afterwards (17 invoices, €3,887 paid). The billing history is more credible
-  than the date, so its revenue stays in MRR and LTV and only its churn month is
-  discarded. Cost: 49 of 52 cancellations are counted, documented rather than absorbed.
-- **The SEK invoices** — treated as a real currency and converted, not as mislabelled
-  EUR.
-- **`I000322`** — quarantined rather than imputed. Inventing €99 of revenue to keep a
-  row is worse than losing the row.
+- **`S00034`** — the `end_date` is before the `start_date`, but the subscription kept
+  billing for 16 months after it (17 invoices, €3,887 paid). The billing history is more
+  reliable than the date, so the revenue stays in MRR and LTV and only the churn month is
+  dropped. Churn covers 49 of 52 cancellations.
+- **SEK invoices** — treated as a real currency and converted, not as EUR with a wrong
+  label.
+- **`I000322`** — quarantined, not imputed. Inventing €99 of revenue to keep a row is
+  worse than losing the row.
 
-Quarantine provides isolation and traceability today. In a larger system it is where
-remediation workflows, upstream ownership alerts and reprocessing of corrected records
-would attach — none of which are implemented here.
+Quarantine gives isolation and traceability today. In a bigger system it is also where
+remediation and alerts to the upstream owner would attach. That is not implemented here.
 
 ---
 
 ## Modelling
 
-**Staging** renames, casts and normalizes, and collapses duplicate business keys. It
-standardizes *format* and does not repair *values*: a blank country stays blank, a
-negative price stays negative. Substituting a value the source never had is a business
-decision and belongs in the mart that needs it.
+**Staging** renames, casts, normalizes and removes duplicate business keys. It
+standardizes format but does not repair values. A blank country stays blank, a negative
+price stays negative. Replacing a value the source never had is a business decision, so
+it belongs in the mart that needs it.
 
-**Intermediate** holds logic that more than one mart uses — the EUR revenue base, the
-mart-eligible subscription set, the FX reference. Models that only one mart consumes
-were left in that mart.
+**Intermediate** holds logic used by more than one mart: the EUR revenue base, the
+mart-eligible subscriptions and the FX reference. Logic used by a single mart stays in
+that mart.
 
 **Marts** answer the three questions in the brief:
 
 | Model | Grain | Definition |
 |---|---|---|
-| `fct_mrr` | month × plan | sum of **paid** invoice amounts in EUR, attributed to the invoice month |
-| `customer_ltv` | customer | total paid revenue, with country, plan mix, current status |
+| `fct_mrr` | month × plan | sum of paid invoice amounts in EUR, by invoice month |
+| `customer_ltv` | customer | total paid revenue, with country, plan mix and current status |
 | `subscription_churn` | cancellation month | cancellations and MRR lost, from `monthly_price` |
 
 MRR is recognised revenue, not contracted value. The brief asks for MRR from paid
-invoices, so failed and open invoices contribute nothing. For a subscription paying on
-time the two definitions agree; they diverge exactly where payment failed, which is the
-point of using the paid basis.
+invoices, so open and failed invoices count for nothing. For a subscription that pays on
+time both definitions give the same number. They differ exactly where payment failed,
+which is the reason to use the paid basis.
 
-`customer_ltv` uses LEFT JOINs throughout so customers whose subscriptions haven't
-billed yet still appear with zero revenue rather than disappearing.
+`customer_ltv` uses LEFT JOINs, so a customer whose subscription has not billed yet still
+appears with zero revenue instead of disappearing.
 
 `subscription_churn` reports scheduled future cancellations with an
-`is_future_cancellation` flag rather than filtering them — they are real commitments,
-but shouldn't be mistaken for realised churn.
+`is_future_cancellation` flag instead of filtering them. They are real commitments, but a
+consumer should not read them as churn that already happened.
 
-Both marts sum to the same €322,890.01, which a mart-level test asserts on every build.
+Both marts total €322,890.01, and a mart test checks this on every build.
 
 Materializations follow current volume, not a rule:
 
@@ -242,57 +229,53 @@ marts                             → tables
 
 ## FX assumption
 
-Reporting currency is EUR. Conversion uses a **static rate mapping** in `int_fx_rates`
-(`SEK → 0.087`), which the brief explicitly permits. Every invoice converts at the same
-rate regardless of its date. Materially this affects one paid invoice, worth €26 of
-€322,890.
+Reporting currency is EUR. `int_fx_rates` holds a static mapping (`SEK → 0.087`), which
+the brief allows. Every invoice converts at the same rate whatever its date. This affects
+one paid invoice, worth €26 out of €322,890.
 
-The model is also a guard: `int_paid_invoices_eur` joins it with an INNER join, so a
-currency with no rate cannot reach revenue at face value — it disappears, and the
-reconciliation test fails loudly.
-
-Static rates are a take-home simplification, not a design. Production alternative is in
-Next Steps.
+The model also works as a guard. `int_paid_invoices_eur` joins it with an INNER join, so
+a currency with no rate cannot reach revenue at face value. It drops out, and the
+reconciliation test fails.
 
 ---
 
 ## Orchestration
 
-One DAG, [`nordstack_analytics`](airflow/dags/nordstack_analytics.py), on the
-five-minute schedule the brief asks for, emailing on success and failure.
+One DAG, [`nordstack_analytics`](airflow/dags/nordstack_analytics.py), on the five-minute
+schedule the brief asks for, with email on success and failure.
 
 ```
 dlt_sync  →  validate_raw  →  dbt_build  →  email
 ```
 
-Three tasks rather than one script, so a failure names itself: a red `dlt_sync` is an
-ingestion problem, a red `validate_raw` means ingestion reported success while the
-warehouse disagrees, and a red `dbt_build` is a modelling or data-quality problem.
-Airflow also retries only the task that failed.
+Three tasks instead of one script, so a failure says what it is. A red `dlt_sync` is an
+ingestion problem. A red `validate_raw` means ingestion reported success while the
+warehouse disagrees. A red `dbt_build` is a modelling or data-quality problem. Airflow
+also retries only the task that failed.
 
 | Setting | Value | Reason |
 |---|---|---|
 | `retries` | 2, 30s apart | transient infrastructure errors only |
-| `execution_timeout` | 4 min | a task outliving the interval is stuck, not slow |
-| `dagrun_timeout` | 4 min | under the schedule interval, so runs can't pile up |
-| `catchup` | `False` | nothing is gained by backfilling five-minute intervals |
+| `execution_timeout` | 4 min | a task that outlives the interval is stuck, not slow |
+| `dagrun_timeout` | 4 min | under the schedule, so runs cannot pile up |
+| `catchup` | `False` | backfilling five-minute intervals gains nothing |
 | `max_active_runs` | 1 | two runs replacing the same tables would race |
-| `sla` | 2 / 3 / 4 min | lateness is the first symptom of overlap |
+| `sla` | 2 / 3 / 4 min | lateness is the first sign of overlap |
 
-Retries are for transient failures. Broken SQL, a schema change or a failed trusted
-contract fails identically every attempt and should stay visible rather than spin.
+Retries are for transient failures. Broken SQL, a schema change or a failed data-quality
+test fails the same way every attempt, so it should stay visible instead of retrying.
 
-Two things this caught. `PythonOperator` marks a task successful unless the callable
-*raises* — both ingestion scripts are CLIs whose `main()` **returns** an exit code, so
-calling them directly reports a failed load as a green task; an adapter converts the code
-into an exception. And `validate_raw` deliberately repeats a check the sync script
-already performs, because a loader that reports success while leaving the warehouse wrong
-is exactly what a self-check cannot catch. Both verified by breaking them on purpose: a
-dead `MYSQL_HOST`, and a row deleted from `raw.customers`.
+Two problems this caught. `PythonOperator` only marks a task failed if the callable
+raises, and both ingestion scripts are CLIs whose `main()` returns an exit code, so
+calling them directly reported a failed load as green. An adapter turns the exit code
+into an exception. And `validate_raw` repeats a check the sync script already does, on
+purpose, because a loader that reports success while leaving the warehouse wrong is
+exactly what a self-check cannot catch. I verified both by breaking them: a dead
+`MYSQL_HOST`, and a row deleted from `raw.customers`.
 
 ### Environment isolation
 
-Only one database exists, so targets separate by **schema**. `dbt_build` resolves its
+Only one database exists, so the targets separate by schema. `dbt_build` resolves its
 target per run: the run's `dbt_target` param, then `DBT_TARGET`, then `dev`.
 
 ```
@@ -300,44 +283,38 @@ scheduled run / airflow dags test  →  dev
 Trigger DAG w/ config → prod       →  prod
 ```
 
-`dev` is the default and the only fallback, so local DAG testing cannot reach
-production; `prod` has to be selected. The resolved target is logged, pushed to XCom and
-included in the notification email. Credentials come from environment configuration —
-`profiles.yml` reads everything through `env_var()` and contains no literal values.
+`dev` is the default and the only fallback, so local DAG testing cannot reach production.
+`prod` has to be chosen. The target is logged, pushed to XCom and shown in the email.
+`profiles.yml` reads every value through `env_var()` and holds no literal credentials.
 
 ---
 
 ## CI/CD
-
-Two workflows, dbt-focused. Every connection setting comes from repository variables and
-secrets.
 
 | Workflow | Trigger | Builds | Target |
 |---|---|---|---|
 | [`dbt-ci.yml`](.github/workflows/dbt-ci.yml) | pull request | `state:modified+` | `dev` |
 | [`dbt-cd.yml`](.github/workflows/dbt-cd.yml) | merge to `main`, or manual | everything | `prod` |
 
-CI runs only when `dbt/`, `ingestion/` or `seed_data/` change — an Airflow-only commit
-builds no warehouse. Within that, `state:modified+` selects changed models plus
-everything downstream; the `+` is what stops a break hiding behind an untouched
-consumer. Verified on a real PR: editing `stg_invoices` rebuilt `int_paid_invoices_eur`,
-`fct_mrr` and `customer_ltv`, and correctly skipped `subscription_churn`.
+CI runs only when `dbt/`, `ingestion/` or `seed_data/` change, so an Airflow-only commit
+does not build the warehouse. `state:modified+` selects the changed models plus
+everything downstream. The `+` matters: it stops a break from hiding behind a consumer
+nobody touched. Verified on a real PR, where editing `stg_invoices` rebuilt
+`int_paid_invoices_eur`, `fct_mrr` and `customer_ltv` and skipped `subscription_churn`.
 
-CD builds everything. A deployment must leave production internally consistent, and
-every test must pass against what is published — not only against what changed in that
-commit. `DBT_TARGET=prod` is set in exactly one place, the CD workflow. CI leaves it
-unset, so a pull request cannot write to production.
+CD builds everything. A deployment has to leave production consistent, and every test has
+to pass against what is published, not only against what changed in that commit.
+`DBT_TARGET=prod` is set in one place only, the CD workflow. CI leaves it unset, so a
+pull request cannot write to production.
 
-**The honest cost of Slim CI here.** `--defer --state` needs a manifest to diff against
-and real tables for unmodified models to resolve to. A GitHub runner has neither, so CI
-bootstraps MySQL, syncs to Postgres and builds the base branch first to have something to
-defer against. On a measured run that baseline costs 5s, the selective build 5s, and dbt
-is 10s of 1m51s total — selective building costs more than it saves at this scale. It
-stays because the substitution is one step: with a persistent warehouse the baseline
-disappears and `--state` points at the manifest CD already publishes.
+**What Slim CI costs here.** `--defer --state` needs a manifest to compare against and
+real tables for the unmodified models. A GitHub runner has neither, so CI bootstraps
+MySQL, syncs to Postgres and builds the base branch first to have something to defer to.
+On a measured run the baseline takes 5s, the selective build 5s, and dbt is 10s out of
+1m51s. At this size selective building costs more than it saves. I kept it because
+replacing the baseline with a real production manifest is a one-line change.
 
-This is CI, not CD in the deployment sense — there is no persistent platform to deploy
-to. A real environment would promote ingestion, dbt and DAG changes after merge.
+This is CI, not CD in the deployment sense. There is no persistent platform to deploy to.
 
 ---
 
@@ -346,59 +323,61 @@ to. A real environment would promote ingestion, dbt and DAG changes after merge.
 | Decision | Choice | Reason |
 |---|---|---|
 | Source boundary | MySQL → dlt → Postgres | exercises real ingestion, not seeding |
-| Write disposition | `replace` | small static dataset; preserves planted defects |
+| Write disposition | `replace` | small static dataset, keeps the planted defects |
 | Raw tests | warn | detect source defects without blocking the build |
 | Quarantine | built from raw | isolate invalid records before staging normalizes them |
-| Staging | format only, no repair | value substitution is a business decision |
-| Mart tests | error | the published contract must hold |
+| Staging | format only, no repair | replacing a value is a business decision |
+| Mart tests | error | the published contract has to hold |
 | Deduplication | dbt staging | visible and tested, not a side effect of ingestion |
-| FX | static mapping | permitted by the brief; dated rates are a production concern |
-| Default dbt target | `dev` | production must be selected, never inherited |
-| CI selection | `state:modified+` with baseline | demonstrates the pattern at negligible cost |
+| FX | static mapping | allowed by the brief; dated rates are a production concern |
+| Default dbt target | `dev` | production has to be chosen, never inherited |
+| CI selection | `state:modified+` with baseline | shows the pattern at almost no cost |
 
 ---
 
 ## Next steps
 
-Deferred deliberately — current volume doesn't justify them.
+**Ingestion.** `replace` is right here because the duplicates are planted on purpose and
+have to survive ingestion. A real billing system would have a real unique ID per table,
+enforced at the source. With reliable keys, `merge` on the business key is the natural
+choice, and CDC after that, instead of extracting everything on a schedule.
 
-**Ingestion.** Move to `merge`/upsert on reliable business keys once full reloads get
-expensive, then CDC from MySQL instead of scheduled extraction. Duplicate detection
-would move from dbt staging to ingestion validation. Source keys and constraints belong
-as close to the transactional model as possible.
+**Separate the dbt repository.** dbt, ingestion and Airflow share one repository here. I
+would move the dbt project into its own repository and pull it in as a submodule, so one
+dbt project can serve the whole data department instead of being tied to this pipeline.
 
-**FX.** Replace static rates with a dated rate table (`date | currency | eur_rate`) fed
-by its own ingestion, and convert each invoice at the rate for its accounting date.
-Historical invoices should not be revalued at today's rate unless the business
-explicitly defines it that way.
+**End-to-end CI/CD.** Today CI/CD only covers dbt. It should cover the Airflow layer as
+well: DAG imports, DAG ID, schedule, task dependencies, and the ingestion scripts run
+against throwaway services. A change in any layer should be validated the same way, and
+deployed the same way after merge.
 
-**Environments.** Persistent dev / CI / staging / prod. Per-developer dbt schemas, and a
-staging environment for end-to-end validation before production.
+**A dev analytics database.** Here `dev` and `prod` are two schemas in the same database
+and both read the same `raw`. In a real setup development would have its own analytics
+database with its own raw layer, so ingestion work never writes into production raw
+tables.
 
-**CI/CD.** Drop the baseline build once a production manifest exists. Add Airflow CI —
-DAG imports, DAG ID, schedule, `catchup`, task dependencies — and ingestion CI covering
-source contracts, schema evolution and a double-run idempotency check. Deploy only
-changed components after merge.
+**Semantic layer.** The metric definitions live inside the mart SQL. A semantic layer
+would define MRR, LTV and churn once and let BI tools query those definitions, so the
+same metric is not re-implemented in every dashboard.
 
-**Materializations.** Tables for large reused intermediates; incremental for large
-frequently rebuilt marts, once measurements justify it — with the questions incremental
-brings (`unique_key`, late-arriving data, lookback windows, full-refresh strategy), none
-of which are worth answering at 3k rows.
+**FX.** Replace the static rates with a dated rate table (`date | currency | eur_rate`)
+loaded by its own pipeline, and convert each invoice at the rate for its accounting date.
+Historical invoices should not be revalued at today's rate unless the business asks for
+that.
 
-**Observability.** Source freshness, SLA alerting, ingestion reconciliation, structured
-metrics, centralized logs.
-
-**Governance.** Least-privilege service accounts, secrets management, PII classification,
-audited access, model ownership, stronger schema contracts.
+**Materializations.** Tables for large reused intermediate models, incremental for large
+marts that are rebuilt often. Incremental brings its own questions (`unique_key`,
+late-arriving data, lookback windows, full refresh), and none of them are worth answering
+at 3k rows.
 
 ---
 
 ## Closing
 
-The dataset is small, so the implementation stays simple — which doesn't have to mean
-undisciplined. Raw keeps its defects visible, known-invalid records are isolated before
-they reach the trusted path, marts enforce contracts that fail the build, retries are
-bounded, dev and prod stay separate, and CI validates changes before merge.
+The dataset is small, so the implementation is simple. Simple does not have to mean
+careless. Raw keeps its defects visible, invalid records are isolated before they reach
+the trusted path, marts enforce contracts that fail the build, retries are bounded, dev
+and prod are separated, and CI validates changes before merge.
 
-Those boundaries are the part that scales: ingestion strategy, materializations,
-observability and CI/CD can each evolve without disturbing the others.
+Those boundaries are the part that scales. Ingestion, materializations and CI/CD can each
+change later without disturbing the rest.
