@@ -1,23 +1,10 @@
 name: dbt CI
 
-# Scope: the dbt project only. Airflow and the wider pipeline are out of scope here.
-# This is CI, not CD -- there is no deployment target to promote to, and faking one
-# would be worse than documenting its absence.
+# Validates a pull request. Builds ONLY what changed plus everything downstream,
+# against the dev target. Never writes to production.
 #
-# ---------------------------------------------------------------------------
-# CONFIGURATION -- nothing below is hardcoded. Set these before the first run:
-#
-#   Repository variables (Settings > Secrets and variables > Actions > Variables)
-#     POSTGRES_DB        POSTGRES_USER        POSTGRES_HOST        POSTGRES_PORT
-#     MYSQL_DATABASE     MYSQL_USER           MYSQL_HOST           MYSQL_PORT
-#
-#   Repository secrets (same page, Secrets tab)
-#     POSTGRES_PASSWORD  MYSQL_PASSWORD       MYSQL_ROOT_PASSWORD
-#
-# The values are in .env.example -- they are throwaway local-development
-# credentials, but they live in repository settings rather than in this file so
-# that pointing CI at a different database is a settings change, not a code change.
-# ---------------------------------------------------------------------------
+# Connection settings come from repository variables and secrets -- nothing here is
+# hardcoded. See CONNECTION_DETAILS.md.
 
 on:
   pull_request:
@@ -26,19 +13,13 @@ on:
       - 'ingestion/**'
       - 'seed_data/**'
       - '.github/workflows/dbt-ci.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'dbt/**'
-      - 'ingestion/**'
-      - 'seed_data/**'
 
 concurrency:
-  group: dbt-ci-${{ github.ref }}
+  group: dbt-ci-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
 
     services:
@@ -48,8 +29,6 @@ jobs:
           POSTGRES_USER: ${{ vars.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB }}
-        # Left side is the runner port (configurable); right side is the port the
-        # image itself listens on, which is fixed by the image, not by us.
         ports:
           - ${{ vars.POSTGRES_PORT }}:5432
         options: >-
@@ -69,8 +48,6 @@ jobs:
           --health-cmd "mysqladmin ping --silent"
           --health-interval 5s --health-timeout 5s --health-retries 15
 
-    # The ingestion scripts and dbt both read connection settings from the
-    # environment, exactly as they do locally. Nothing is passed on a command line.
     env:
       MYSQL_HOST: ${{ vars.MYSQL_HOST }}
       MYSQL_PORT: ${{ vars.MYSQL_PORT }}
@@ -86,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # main's history is needed for the state comparison
+          fetch-depth: 0          # the base branch is needed for state comparison
 
       - uses: actions/setup-python@v5
         with:
@@ -96,8 +73,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # dbt cannot read a warehouse that does not exist yet. This is the same
-      # sequence a reviewer runs locally, which is the point.
+      # dbt cannot read a warehouse that does not exist. Same sequence a reviewer
+      # runs locally, which is the point of keeping it here.
       - name: Bootstrap MySQL source
         run: python ingestion/bootstrap_mysql.py
 
@@ -109,15 +86,15 @@ jobs:
         run: dbt deps
 
       # ---------------------------------------------------------------------
-      # Baseline: build main's version of the project into the `prod` target.
+      # Baseline: build the BASE branch into the prod target.
       #
-      # This is what makes state comparison possible without a permanent
-      # production warehouse. `--defer --state` needs two things: a manifest to
-      # diff against, and real tables for unmodified models to resolve to.
-      # Building main provides both, in a database discarded with the job.
+      # State comparison needs two things: a manifest to diff against, and real
+      # tables for unmodified models to defer to. With no permanent warehouse,
+      # building the base branch provides both -- in a database thrown away with
+      # the job. In an organisation with a persistent production warehouse this
+      # step disappears and --state points at the artifact CD published.
       # ---------------------------------------------------------------------
       - name: Build baseline from ${{ github.base_ref }}
-        if: github.event_name == 'pull_request'
         env:
           DBT_TARGET: prod
         run: |
@@ -127,20 +104,16 @@ jobs:
           dbt build --target-path /tmp/baseline-target
 
       # ---------------------------------------------------------------------
-      # PR: build only what changed, plus everything downstream of it.
-      #
-      #   state:modified+   the `+` is the downstream part -- a changed staging
+      #   state:modified+   the `+` is the downstream part: a changed staging
       #                     model rebuilds the marts that consume it, so a break
       #                     cannot hide behind an untouched consumer.
       #   --defer --state   unmodified upstream models resolve to the baseline
-      #                     rather than being rebuilt.
+      #                     instead of being rebuilt.
       #
-      # If nothing dbt-related changed, dbt selects zero nodes and exits 0.
-      # DBT_TARGET is left unset on purpose: profiles.yml falls back to `dev`, so
-      # a PR can never write to the production target.
+      # DBT_TARGET is deliberately unset: profiles.yml falls back to dev, so a PR
+      # can never write to the production target.
       # ---------------------------------------------------------------------
       - name: Build modified models and their downstream
-        if: github.event_name == 'pull_request'
         working-directory: dbt
         run: |
           dbt build \
@@ -148,20 +121,10 @@ jobs:
             --defer --state /tmp/baseline-target \
             --favor-state
 
-      # On main there is no baseline to defer to, so build the whole project.
-      - name: Build full project
-        if: github.event_name == 'push'
-        working-directory: dbt
-        run: dbt build
-
-      - name: Generate docs
-        working-directory: dbt
-        run: dbt docs generate
-
-      - name: Upload dbt artifacts
+      - name: Upload run artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: dbt-target-${{ github.run_id }}
+          name: dbt-ci-${{ github.run_id }}
           path: dbt/target/
           retention-days: 7
