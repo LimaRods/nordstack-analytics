@@ -14,6 +14,10 @@ clean-targets: ["target", "dbt_packages"]
 
 # Materializations reflect the current data volume (~3.1k rows), not hypothetical
 # scale. See CLAUDE.md section 8. Incremental models are a Next Step, not a default.
+# One schema per target -- `dev` and `prod` -- rather than a schema per layer. With
+# twelve models the layer prefix in each name (stg_, int_, invalid_, fct_) already
+# says where a model sits, and a single schema keeps the environment boundary the
+# only thing a reader has to track.
 models:
   nordstack:
     staging:

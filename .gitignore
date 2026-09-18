@@ -40,3 +40,6 @@ airflow/airflow.db
 airflow/airflow.cfg
 airflow/logs/
 airflow/simple_auth_manager_passwords.json.generated
+airflow/webserver_config.py
+airflow/standalone_admin_password.txt
+logs/
