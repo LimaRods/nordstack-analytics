@@ -1,9 +1,5 @@
--- MART CONTRACT -- no published figure may be negative.
---
--- Negative revenue or negative churned MRR would mean a quarantine rule failed: the
--- source's -99.00 price (S00048) and its seven invoices are the only way such a value
--- could arise, and all eight are excluded upstream.
---
+-- Mart contract: no published figure may be negative. A negative value would mean a
+-- quarantine rule failed -- S00048's -99.00 price and its invoices are the only source.
 -- Returns rows only on failure.
 
 select 'fct_mrr' as model, invoice_month::text as key, mrr_eur as value

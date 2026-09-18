@@ -2,9 +2,8 @@ version: 2
 
 models:
 
-  # Marts run at ERROR severity: this is the published contract. Raw tests warn because
-  # the source is expected to be dirty; here, a failure means bad data escaped
-  # quarantine and reached a consumer.
+  # Error severity: this is the published contract. A failure here means bad data
+  # escaped quarantine and reached a consumer.
 
   - name: fct_mrr
     description: >

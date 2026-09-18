@@ -2,19 +2,10 @@ version: 2
 
 models:
 
-  # NO TESTS AT THIS LAYER -- by design.
-  #
-  # Tests live at the two ends of the pipeline:
-  #   raw   (warn)  -> detect what arrived from the billing system
-  #   marts (error) -> assert what is published to consumers
-  #
-  # Staging sits between them: it standardizes format and guarantees grain, but asserts
-  # nothing. Testing it would mostly restate the raw tests against a copy of the same
-  # rows, and the defects it does NOT repair (orphans, negative amounts, the impossible
-  # end_date) would fail here by design.
-  #
-  # What remains below is documentation. dbt docs generate reads these descriptions,
-  # and the brief asks for them on the models and their key columns.
+  # No tests at this layer, by design. Tests live at the two ends: raw (warn) detects
+  # what arrived, marts (error) assert what is published. Staging standardizes format
+  # and guarantees grain but asserts nothing -- testing it would restate the raw tests
+  # against a copy of the same rows.
 
   - name: stg_customers
     description: >

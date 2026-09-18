@@ -1,19 +1,9 @@
--- One row per customer.
+-- One row per customer. Standardizes format; does not repair values -- a blank country
+-- stays blank, a malformed email stays malformed. Substituting a value the source never
+-- had is a business decision and belongs in the mart that needs it.
 --
--- Staging STANDARDIZES FORMAT; it does not repair values.
---   standardize -> casing, whitespace, types: safe, reversible, loses no information
---   repair      -> substituting a value the source never had: a business decision,
---                  so it belongs in the mart that needs it
---
--- This is safe only because models/quarantine/ detects defects from the SOURCE, not
--- from here. The audit trail is independent of whatever staging does, so normalizing
--- can no longer hide anything.
---
--- Left deliberately alone: a blank country stays blank (the marts COALESCE it to
--- 'UNKNOWN' where they report on country) and a malformed email stays malformed.
---
--- Deduplication is kept: a duplicate row is a grain problem, not a formatting one.
--- D1 (C0023) arrives twice, byte-identical, so collapsing it is lossless.
+-- Deduplication is the exception: a duplicate row is a grain problem, and C0023's two
+-- rows are byte-identical, so collapsing them loses nothing.
 
 with source as (
 

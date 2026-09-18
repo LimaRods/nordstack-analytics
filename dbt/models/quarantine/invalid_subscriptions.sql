@@ -1,30 +1,23 @@
--- Subscriptions breaching at least one data-quality rule, detected at the source.
+-- Subscriptions breaching at least one data-quality rule, detected against the source.
 --
 -- excluded_from_marts separates two populations:
---   true  -> the row cannot be attributed or priced, so it must not reach any mart
---   false -> the row is usable; only a field is suspect, and the marts decide
---
--- S00034 is the second kind: its end_date precedes its start_date, yet it billed for
--- 16 more months (17 invoices, 13 paid, EUR 3,887). Its revenue is real, so it stays in
--- MRR and LTV -- the churn mart is the one that must ignore it. See DISCOVERY.md 5.1.
+--   true  -> cannot be attributed or priced, so it must not reach any mart
+--   false -> usable; one field is suspect and the marts decide what to do
 
 with source as (
 
-    -- was_duplicated is computed HERE, before any join. Computing it after the join to
-    -- customers would count join fan-out as source duplication: C0023 has two rows in
-    -- raw.customers, which silently doubled its subscriptions S00029 and S00030 and
-    -- reported them as duplicates they are not.
+    -- was_duplicated is computed before any join. Computing it afterwards would count
+    -- join fan-out as source duplication: C0023 has two rows in raw.customers, which
+    -- would report its subscriptions as duplicates they are not.
     select
         *,
-        count(*) over (partition by subscription_id) > 1 as was_duplicated   -- D5
+        count(*) over (partition by subscription_id) > 1 as was_duplicated
     from {{ source('billing_raw', 'subscriptions') }}
 
 ),
 
 customer_keys as (
 
-    -- DISTINCT is load-bearing: raw.customers contains C0023 twice, and joining it
-    -- un-deduplicated would multiply every subscription belonging to that customer.
     select distinct customer_id
     from {{ source('billing_raw', 'customers') }}
 
@@ -42,11 +35,11 @@ flagged as (
         s.status,
 
         s.was_duplicated,
-        c.customer_id is null                               as has_orphan_customer,     -- D6
-        s.status <> lower(trim(s.status))                   as has_unnormalized_status, -- D7
+        c.customer_id is null                               as has_orphan_customer,
+        s.status <> lower(trim(s.status))                   as has_unnormalized_status,
         (s.end_date is not null and s.end_date < s.start_date)
-                                                            as has_invalid_end_date,    -- D8
-        (s.monthly_price is null or s.monthly_price <= 0)   as has_invalid_price        -- D9
+                                                            as has_invalid_end_date,
+        (s.monthly_price is null or s.monthly_price <= 0)   as has_invalid_price
 
     from source as s
     left join customer_keys as c

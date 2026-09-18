@@ -12,12 +12,9 @@ seed-paths: ["seeds"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
-# Materializations reflect the current data volume (~3.1k rows), not hypothetical
-# scale. See CLAUDE.md section 8. Incremental models are a Next Step, not a default.
-# One schema per target -- `dev` and `prod` -- rather than a schema per layer. With
-# twelve models the layer prefix in each name (stg_, int_, invalid_, fct_) already
-# says where a model sits, and a single schema keeps the environment boundary the
-# only thing a reader has to track.
+# Materializations reflect current volume (~3.1k rows). One schema per target rather
+# than per layer: the prefix in each model name already says where it sits, so the
+# environment boundary stays the only thing a reader has to track.
 models:
   nordstack:
     staging:
@@ -29,15 +26,8 @@ models:
     marts:
       +materialized: table
 
-# Test severity encodes WHERE the contract applies.
-#
-# raw sources -> warn. The source is expected to be dirty: these tests exist to make
-#   the planted defects visible and counted in every build, not to stop it. Deleting
-#   them to get a green build is what CLAUDE.md section 9 forbids.
-#
-# staging + marts -> error. Staging is the trust boundary. Tests there are scoped to
-#   the accepted set (is_valid), so a failure means a defect slipped past quarantine
-#   into data the marts are allowed to consume.
+# Severity encodes where the contract applies: raw warns (the source is expected to be
+# dirty), marts error (the published contract must hold).
 data_tests:
   nordstack:
     staging:

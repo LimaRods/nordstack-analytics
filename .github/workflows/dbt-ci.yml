@@ -1,10 +1,7 @@
 name: dbt CI
 
-# Validates a pull request. Builds ONLY what changed plus everything downstream,
-# against the dev target. Never writes to production.
-#
-# Connection settings come from repository variables and secrets -- nothing here is
-# hardcoded. See CONNECTION_DETAILS.md.
+# Validates a pull request: builds what changed plus everything downstream, against the
+# dev target. Connection settings come from repository variables and secrets.
 
 on:
   pull_request:
@@ -73,8 +70,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # dbt cannot read a warehouse that does not exist. Same sequence a reviewer
-      # runs locally, which is the point of keeping it here.
+      # dbt cannot read a warehouse that does not exist -- same sequence a reviewer runs.
       - name: Bootstrap MySQL source
         run: python ingestion/bootstrap_mysql.py
 
@@ -85,15 +81,9 @@ jobs:
         working-directory: dbt
         run: dbt deps
 
-      # ---------------------------------------------------------------------
-      # Baseline: build the BASE branch into the prod target.
-      #
-      # State comparison needs two things: a manifest to diff against, and real
-      # tables for unmodified models to defer to. With no permanent warehouse,
-      # building the base branch provides both -- in a database thrown away with
-      # the job. In an organisation with a persistent production warehouse this
-      # step disappears and --state points at the artifact CD published.
-      # ---------------------------------------------------------------------
+      # State comparison needs a manifest to diff against and real tables to defer to.
+      # With no persistent warehouse, building the base branch provides both. With one,
+      # this step disappears and --state points at the manifest CD publishes.
       - name: Build baseline from ${{ github.base_ref }}
         env:
           DBT_TARGET: prod
@@ -103,16 +93,10 @@ jobs:
           cd /tmp/baseline/dbt
           dbt build --target-path /tmp/baseline-target
 
-      # ---------------------------------------------------------------------
-      #   state:modified+   the `+` is the downstream part: a changed staging
-      #                     model rebuilds the marts that consume it, so a break
-      #                     cannot hide behind an untouched consumer.
-      #   --defer --state   unmodified upstream models resolve to the baseline
-      #                     instead of being rebuilt.
-      #
-      # DBT_TARGET is deliberately unset: profiles.yml falls back to dev, so a PR
-      # can never write to the production target.
-      # ---------------------------------------------------------------------
+      # The `+` is the downstream part: a changed staging model rebuilds the marts that
+      # consume it, so a break cannot hide behind an untouched consumer. DBT_TARGET is
+      # deliberately unset here -- profiles.yml falls back to dev, so a PR cannot write
+      # to production.
       - name: Build modified models and their downstream
         working-directory: dbt
         run: |

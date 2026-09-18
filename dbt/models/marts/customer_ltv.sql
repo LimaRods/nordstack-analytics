@@ -1,20 +1,12 @@
--- Brief requirement 2: customer lifetime value to date.
+-- Lifetime value to date. Grain: one row per customer, including those with no revenue.
 --
--- Grain: one row per customer -- every customer, including those with no paid revenue.
+-- LEFT JOINs throughout: an INNER join would silently drop customers whose
+-- subscriptions have not billed yet and understate their plan mix. Revenue is
+-- COALESCEd to 0 rather than left NULL.
 --
--- The brief asks for total paid revenue per customer with their country, plan mix, and
--- current subscription status.
---
--- LEFT JOINs throughout, deliberately. An INNER join would silently drop customers whose
--- subscriptions have not yet billed -- C0101's S00149 starts in the future with zero
--- invoices (E15) -- and would understate the plan mix of anyone holding such a
--- subscription. Revenue is COALESCEd to 0 rather than left NULL.
---
--- CURRENT STATUS rule (DISCOVERY.md 5.4), applied because a customer may hold up to
--- three subscriptions: 'active' if ANY subscription is active, otherwise the status of
--- the most recently started one, ties broken by subscription_id for determinism.
--- Note this can report a customer as active on the strength of a subscription that has
--- not started yet -- C0101 is exactly that case.
+-- Current status, since a customer may hold several subscriptions: 'active' if any is
+-- active, otherwise the status of the most recently started one. This can report a
+-- customer as active on the strength of a subscription that has not begun yet.
 
 with customers as (
 
@@ -47,8 +39,7 @@ subscription_summary as (
         customer_id,
         count(*)                                                  as subscription_count,
         count(*) filter (where status = 'active')                 as active_subscriptions,
-        -- Plan mix as a sorted distinct list, e.g. 'growth, scale'. Sorted so the value
-        -- is stable across runs and comparable between customers.
+        -- Sorted so the value is stable across runs and comparable between customers.
         string_agg(distinct plan_name, ', ' order by plan_name)   as plan_mix
     from subscriptions
     group by customer_id

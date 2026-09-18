@@ -1,16 +1,10 @@
--- Paid invoices, normalized to EUR. The revenue base for both fct_mrr and customer_ltv.
+-- Paid invoices normalized to EUR. The revenue base for fct_mrr and customer_ltv.
 --
--- Three things happen here, and each is a business decision rather than formatting:
---   1. Only `paid` counts as revenue. `open` and `failed` contribute nothing.
---   2. Quarantined invoices are dropped -- unattributable, or with an unusable amount.
---   3. Amounts are converted to EUR through int_fx_rates.
+-- Three business decisions live here: only `paid` counts as revenue, quarantined
+-- invoices are dropped, and amounts are converted through int_fx_rates.
 --
--- The status filter is safe because stg_invoices already normalized casing: I000451's
--- 'PAID ' is folded to 'paid' upstream, so its EUR 29 is included rather than silently
--- dropped by an exact match.
---
--- Joined to int_subscriptions (not stg_subscriptions) so an invoice belonging to an
--- excluded subscription cannot slip into revenue through the back door.
+-- Joined to int_subscriptions rather than stg_subscriptions so an invoice belonging to
+-- an excluded subscription cannot slip into revenue through the back door.
 
 with invoices as (
 

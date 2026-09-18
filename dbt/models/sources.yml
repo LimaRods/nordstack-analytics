@@ -3,17 +3,14 @@ version: 2
 sources:
   - name: billing_raw
     description: >
-      Raw mirror of the MySQL billing system, loaded by dlt. Deliberately preserves
-      source defects: dlt uses write_disposition="replace" rather than "merge" so that
-      nothing is deduplicated or cleaned during ingestion. See README decision #2.
+      Raw mirror of the MySQL billing system, loaded by dlt with write_disposition
+      "replace", so nothing is deduplicated or cleaned during ingestion.
     schema: raw
     database: analytics
 
-    # Raw-layer tests are DIAGNOSTIC. They run at warn severity because the source is
-    # expected to be dirty -- their job is to make the planted defects visible in every
-    # `dbt build`, not to break it. The same rules run at error severity on staging,
-    # where the data is supposed to be trustworthy. See CLAUDE.md section 9.
-    #
+    # Raw tests are diagnostic: warn severity, because the source is expected to be
+    # dirty. Their job is to make the planted defects visible in every build, not to
+    # break it. The published contract is enforced on the marts instead.
     tables:
 
       - name: customers

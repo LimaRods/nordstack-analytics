@@ -1,17 +1,10 @@
 -- One row per monthly invoice. The revenue grain for every mart.
--- (CI selector check: this edit should rebuild the invoice lineage, nothing else.)
+-- No deduplication needed -- invoice_id is unique at source.
 --
--- Standardizes format only. No deduplication needed -- invoice_id is unique at source.
---
---   D13: I000451's 'PAID ' (uppercase, trailing space) is folded to 'paid' HERE. This
---        is the single most valuable normalization in the project: with the raw value,
---        any `where status = 'paid'` silently drops EUR 29 from revenue, and every
---        consumer would have to remember lower(trim()) forever. Doing it once removes
---        the landmine. The defect stays visible in quarantine, detected from source.
---
--- Left deliberately alone: a null amount (I000322), negative amounts
--- (I000725-I000731), and SEK currency. What to do with those is a business decision
--- the marts make -- exclude, or convert via the FX mapping.
+-- Normalizing status here is the most valuable cleanup in the project: I000451 holds
+-- 'PAID ' with a trailing space, so any `where status = 'paid'` would silently drop it.
+-- Amounts and currency are left alone -- what to do with a null amount, a negative one,
+-- or SEK is a business decision the marts make.
 
 select
     trim(invoice_id)                as invoice_id,

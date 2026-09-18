@@ -1,28 +1,15 @@
--- Brief requirement 3: for each month, how many subscriptions were cancelled and the
--- MRR lost.
+-- Cancellations and MRR lost per month. Grain: one row per cancellation month.
 --
--- Grain: one row per cancellation month.
+-- Churn month is the month of end_date. MRR lost is the sum of monthly_price -- the
+-- source carries the recurring price directly, so no proxy is needed, and prices are
+-- already EUR.
 --
--- CHURN MONTH is the month of end_date -- the month the cancellation took effect.
+-- Exclusions are inherited from int_subscriptions: rows that cannot be attributed or
+-- priced never arrive, and S00034 is excluded from churn only, because its cancellation
+-- month is not knowable. 49 of 52 cancellations are counted.
 --
--- MRR LOST is the sum of monthly_price over the cancelled subscriptions. The source
--- carries the recurring price directly, so no proxy (such as the last paid invoice) is
--- needed. Prices are already EUR; no FX conversion applies, unlike fct_mrr which
--- converts per invoice.
---
--- EXCLUSIONS, both inherited from int_subscriptions:
---   - subscriptions that cannot be attributed or priced (S00011, S00048) are gone
---     before this model sees them;
---   - S00034 is excluded from churn ONLY. Its end_date precedes its start_date and it
---     kept billing for 16 months afterwards, so the cancellation month is not knowable.
---     Its EUR 3,887 of paid revenue still appears in fct_mrr and customer_ltv. The cost
---     is one missing cancellation in 2025-03 -- documented, not silently absorbed.
---     See DISCOVERY.md section 5.1.
---
--- FUTURE MONTHS APPEAR HERE BY DESIGN. Three subscriptions carry cancellation dates in
--- 2027 (E16): scheduled cancellations that have not taken effect yet. They are real
--- commitments, so they are reported rather than filtered -- but a consumer charting
--- churn over time should not mistake them for realised churn.
+-- Future months appear by design: three subscriptions carry 2027 cancellation dates.
+-- They are real commitments, so they are reported and flagged rather than filtered.
 
 select
     date_trunc('month', end_date)::date    as churn_month,

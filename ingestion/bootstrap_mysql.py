@@ -1,15 +1,11 @@
 """Bootstrap the simulated MySQL billing source from seed_data/*.csv.
 
-This initializes the fictional source system for the assessment. It is NOT the
-analytics ingestion pipeline -- that is sync_mysql_to_postgres.py (Phase 3), which
-reads these tables with dlt.
+This initializes the fictional source system; the analytics ingestion pipeline is
+sync_mysql_to_postgres.py.
 
-Idempotent by replacement: the DDL drops and recreates each table, so running this
-twice leaves 121 / 175 / 2855 rows, never 242 / 350 / 5710.
-
-Deliberately preserves every planted defect. The only transformation applied is
-converting empty CSV strings to SQL NULL for the three genuinely-nullable columns;
-no value is cleaned, normalized, deduplicated, or repaired. See DISCOVERY.md.
+Idempotent by replacement: the DDL drops and recreates each table, so running it twice
+leaves 121 / 175 / 2855 rows. Every planted defect is preserved -- the only change
+applied is converting empty CSV strings to NULL for the three nullable columns.
 
 Usage:
     python ingestion/bootstrap_mysql.py

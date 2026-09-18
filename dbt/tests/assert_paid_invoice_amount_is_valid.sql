@@ -1,18 +1,9 @@
 {{ config(severity = 'warn') }}
 
--- SINGULAR TEST A -- paid revenue must be economically valid.
---
--- Runs against RAW, so it reports the defects as they arrive from the billing system.
--- Warn severity: raw is expected to be dirty, and a failure here must not stop
--- `dbt build` from constructing the downstream models. The rows it finds are the ones
--- quarantine/invalid_invoices captures.
---
--- status is normalized inline (lower/trim) because raw has not been cleaned yet:
--- I000451 holds 'PAID ' with a trailing space, and an exact match on 'paid' would
--- miss it. The same normalization is done properly in stg_invoices.
---
--- Expected: 6 rows -- I000322 (paid, null amount, D11) and the five paid invoices
--- among I000725-I000731 (-99.00, D12).
+-- Paid revenue must be economically valid. Runs against raw at warn severity, so the
+-- defects are reported as they arrive. status is normalized inline because raw has not
+-- been cleaned yet -- an exact match on 'paid' would miss I000451's 'PAID '.
+-- Expected: 6 rows -- I000322 and the five paid invoices priced at -99.00.
 
 select
     invoice_id,

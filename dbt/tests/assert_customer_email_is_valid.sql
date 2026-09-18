@@ -1,13 +1,7 @@
 {{ config(severity = 'warn') }}
 
--- Supporting test -- customer email should look like an address.
---
--- Runs against RAW at warn severity. email feeds none of the three required marts, so
--- a malformed one never justifies withholding a customer's revenue -- stg_customers
--- keeps the row and flags is_valid_email = false. This test exists so the defect is
--- counted in every build instead of disappearing quietly.
---
--- Expected: 1 row -- C0016, which holds the literal 'not-an-email' (D3).
+-- email feeds no mart, so a malformed one never justifies withholding revenue. This
+-- exists so the defect is counted in every build. Expected: C0016, 'not-an-email'.
 
 select
     customer_id,

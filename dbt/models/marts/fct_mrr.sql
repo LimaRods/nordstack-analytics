@@ -1,20 +1,11 @@
--- Brief requirement 1: Monthly Recurring Revenue by month and by plan.
+-- Monthly Recurring Revenue by month and plan. Grain: one row per (month, plan).
 --
--- Grain: one row per (month, plan).
+-- MRR here is recognised revenue: paid invoice amounts in EUR, attributed to the month
+-- the invoice was issued. The brief asks for MRR from paid invoices, so this is cash
+-- collected, not contracted value. The two coincide for a subscription paying on time
+-- and diverge exactly where payment failed -- which is the point of the paid basis.
 --
--- DEFINITION. MRR here is recognised revenue: the sum of PAID invoice amounts, in EUR,
--- attributed to the month the invoice was issued. The brief asks explicitly for MRR
--- "from paid invoices", so this is cash actually collected -- not contracted
--- subscription value, which would be sum(monthly_price) over active subscriptions and
--- would give a different (higher) number since failed and open invoices would count.
---
--- Because billing is monthly and each invoice equals its subscription's monthly_price,
--- the two definitions coincide for any subscription that pays on time. They diverge
--- exactly where payment failed -- which is the point of using the paid-invoice basis.
---
--- Months with no paid invoice for a plan simply do not appear; the series is not
--- gap-filled. S00040's missed December 2024 (E17) therefore shows as a dip rather than
--- a zero.
+-- Months with no paid invoice for a plan are absent rather than zero-filled.
 
 select
     invoice_month,

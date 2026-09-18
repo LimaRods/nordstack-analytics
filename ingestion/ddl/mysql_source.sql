@@ -1,30 +1,19 @@
--- NordStack — simulated operational billing source (MySQL 8.0)
+-- NordStack -- simulated operational billing source (MySQL 8.0).
+-- Executed by ingestion/bootstrap_mysql.py; dlt reads these tables into PostgreSQL raw.
 --
--- Executed by ingestion/bootstrap_mysql.py. Represents the billing system that
--- produced seed_data/*.csv. This is SOURCE INITIALIZATION, not analytics ingestion:
--- dlt reads these tables in Phase 3 and lands them in the PostgreSQL `raw` schema.
+-- No PRIMARY KEY, FOREIGN KEY, CHECK or NOT NULL constraints, deliberately. A real
+-- billing system would declare all of them; here each would reject a planted defect at
+-- INSERT time and destroy the data-quality issue the dbt tests exist to catch:
 --
--- ---------------------------------------------------------------------------
--- DELIBERATE OMISSION: no PRIMARY KEY, FOREIGN KEY, CHECK or NOT NULL constraints
--- ---------------------------------------------------------------------------
--- A real billing system would declare all of them. They are omitted here because
--- the assessment ships deliberately planted defects that constraints would reject
--- at INSERT time, destroying the very data-quality issues the dbt tests must catch
--- (CANDIDATE_BRIEF.md section 3). See DISCOVERY.md for the full inventory.
+--   PRIMARY KEY  -> duplicate rows C0023, S00006
+--   FOREIGN KEY  -> orphans S00011 -> C9999, I000601 -> S99999
+--   CHECK        -> negative money S00048, I000725-I000731
+--   NOT NULL     -> blank country C0008, null amount I000322
 --
---   PRIMARY KEY  -> would reject duplicate rows C0023 (customers), S00006 (subscriptions)
---   FOREIGN KEY  -> would reject orphans S00011 -> C9999, I000601 -> S99999
---   CHECK        -> would reject negative money: S00048, I000725-I000731
---   NOT NULL     -> would reject blank country (C0008) and null amount (I000322)
+-- The business key is declared where it destroys no evidence: as a dlt resource hint,
+-- and as dbt tests. Enforcement lives in the trust layer, not in the raw source.
 --
--- The business key is declared instead where it does not destroy evidence:
--- as a primary_key hint on the dlt resource, and as dbt `unique` + `not_null`
--- tests in staging. Enforcement lives in the trust layer, not in the raw source.
---
--- Type notes:
---   DECIMAL(10,2) for money  -- never FLOAT; these values sum into every revenue metric
---   DATE for dates           -- all values in seed_data parse cleanly (DISCOVERY.md 3.5)
---   VARCHAR for status/currency/country -- preserves 'PAID ' and 'ACTIVE' byte-for-byte
+-- Money is DECIMAL, never FLOAT: these values sum into every revenue metric.
 
 DROP TABLE IF EXISTS customers;
 CREATE TABLE customers (
