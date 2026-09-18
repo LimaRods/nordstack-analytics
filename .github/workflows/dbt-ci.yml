@@ -1,7 +1,24 @@
 name: dbt CI
 
-# Component-aware: only runs when dbt or the ingestion feeding it changes.
-# Airflow-only or docs-only changes do not trigger a warehouse build.
+# Scope: the dbt project only. Airflow and the wider pipeline are out of scope here.
+# This is CI, not CD -- there is no deployment target to promote to, and faking one
+# would be worse than documenting its absence.
+#
+# ---------------------------------------------------------------------------
+# CONFIGURATION -- nothing below is hardcoded. Set these before the first run:
+#
+#   Repository variables (Settings > Secrets and variables > Actions > Variables)
+#     POSTGRES_DB        POSTGRES_USER        POSTGRES_HOST        POSTGRES_PORT
+#     MYSQL_DATABASE     MYSQL_USER           MYSQL_HOST           MYSQL_PORT
+#
+#   Repository secrets (same page, Secrets tab)
+#     POSTGRES_PASSWORD  MYSQL_PASSWORD       MYSQL_ROOT_PASSWORD
+#
+# The values are in .env.example -- they are throwaway local-development
+# credentials, but they live in repository settings rather than in this file so
+# that pointing CI at a different database is a settings change, not a code change.
+# ---------------------------------------------------------------------------
+
 on:
   pull_request:
     paths:
@@ -28,42 +45,48 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: dbt_user
-          POSTGRES_PASSWORD: dbt_password
-          POSTGRES_DB: analytics
-        ports: ['5432:5432']
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+        # Left side is the runner port (configurable); right side is the port the
+        # image itself listens on, which is fixed by the image, not by us.
+        ports:
+          - ${{ vars.POSTGRES_PORT }}:5432
         options: >-
-          --health-cmd "pg_isready -U dbt_user -d analytics"
+          --health-cmd "pg_isready"
           --health-interval 5s --health-timeout 5s --health-retries 10
 
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: root_password
-          MYSQL_DATABASE: billing
-          MYSQL_USER: billing_user
-          MYSQL_PASSWORD: billing_password
-        ports: ['3306:3306']
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ vars.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        ports:
+          - ${{ vars.MYSQL_PORT }}:3306
         options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -proot_password --silent"
+          --health-cmd "mysqladmin ping --silent"
           --health-interval 5s --health-timeout 5s --health-retries 15
 
+    # The ingestion scripts and dbt both read connection settings from the
+    # environment, exactly as they do locally. Nothing is passed on a command line.
     env:
-      MYSQL_HOST: 127.0.0.1
-      MYSQL_PORT: '3306'
-      MYSQL_DATABASE: billing
-      MYSQL_USER: billing_user
-      MYSQL_PASSWORD: billing_password
-      POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: '5432'
-      POSTGRES_DB: analytics
-      POSTGRES_USER: dbt_user
-      POSTGRES_PASSWORD: dbt_password
+      MYSQL_HOST: ${{ vars.MYSQL_HOST }}
+      MYSQL_PORT: ${{ vars.MYSQL_PORT }}
+      MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
+      MYSQL_USER: ${{ vars.MYSQL_USER }}
+      MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+      POSTGRES_HOST: ${{ vars.POSTGRES_HOST }}
+      POSTGRES_PORT: ${{ vars.POSTGRES_PORT }}
+      POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+      POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # need main's history for the state comparison
+          fetch-depth: 0          # main's history is needed for the state comparison
 
       - uses: actions/setup-python@v5
         with:
@@ -73,8 +96,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # The warehouse must exist before dbt can read from it. This is the same
-      # sequence a reviewer runs locally.
+      # dbt cannot read a warehouse that does not exist yet. This is the same
+      # sequence a reviewer runs locally, which is the point.
       - name: Bootstrap MySQL source
         run: python ingestion/bootstrap_mysql.py
 
@@ -90,32 +113,31 @@ jobs:
       #
       # This is what makes state comparison possible without a permanent
       # production warehouse. `--defer --state` needs two things: a manifest to
-      # diff against, and real tables for the unmodified models to resolve to.
-      # Building main here provides both, in a database thrown away with the job.
-      #
-      # On a push to main there is nothing to compare against, so this is skipped
-      # and the next step builds everything.
+      # diff against, and real tables for unmodified models to resolve to.
+      # Building main provides both, in a database discarded with the job.
       # ---------------------------------------------------------------------
-      - name: Build baseline from main
+      - name: Build baseline from ${{ github.base_ref }}
         if: github.event_name == 'pull_request'
-        run: |
-          git worktree add /tmp/baseline origin/${{ github.base_ref }}
-          cp -R dbt/dbt_packages /tmp/baseline/dbt/dbt_packages 2>/dev/null || true
-          cd /tmp/baseline/dbt
-          DBT_TARGET=prod dbt build --target-path /tmp/baseline-target
         env:
           DBT_TARGET: prod
+        run: |
+          git worktree add /tmp/baseline "origin/${{ github.base_ref }}"
+          cp -R dbt/dbt_packages /tmp/baseline/dbt/dbt_packages 2>/dev/null || true
+          cd /tmp/baseline/dbt
+          dbt build --target-path /tmp/baseline-target
 
       # ---------------------------------------------------------------------
       # PR: build only what changed, plus everything downstream of it.
       #
       #   state:modified+   the `+` is the downstream part -- a changed staging
-      #                     model rebuilds the marts that depend on it, so a
-      #                     break cannot hide behind an untouched consumer.
+      #                     model rebuilds the marts that consume it, so a break
+      #                     cannot hide behind an untouched consumer.
       #   --defer --state   unmodified upstream models resolve to the baseline
-      #                     schema instead of being rebuilt.
+      #                     rather than being rebuilt.
       #
-      # If nothing dbt-related changed, dbt selects zero models and exits 0.
+      # If nothing dbt-related changed, dbt selects zero nodes and exits 0.
+      # DBT_TARGET is left unset on purpose: profiles.yml falls back to `dev`, so
+      # a PR can never write to the production target.
       # ---------------------------------------------------------------------
       - name: Build modified models and their downstream
         if: github.event_name == 'pull_request'
@@ -126,7 +148,7 @@ jobs:
             --defer --state /tmp/baseline-target \
             --favor-state
 
-      # On main, there is no baseline to defer to: build the whole project.
+      # On main there is no baseline to defer to, so build the whole project.
       - name: Build full project
         if: github.event_name == 'push'
         working-directory: dbt

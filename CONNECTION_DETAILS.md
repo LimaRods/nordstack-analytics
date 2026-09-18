@@ -136,3 +136,54 @@ _To document: profile name, target schemas, `dbt debug` command._
 
 _To document: webserver URL and port, admin credentials, SMTP settings for the
 success/failure email, and the Airflow Connection IDs used by the DAG._
+
+---
+
+## CI configuration (GitHub Actions)
+
+`.github/workflows/dbt-ci.yml` hardcodes nothing. Before the first run, set these in
+**Settings → Secrets and variables → Actions**. The values are the ones in
+`.env.example`; they live in repository settings so that pointing CI at a different
+database is a settings change rather than a code change.
+
+### Variables tab
+
+| Variable | Value |
+|---|---|
+| `POSTGRES_HOST` | `127.0.0.1` |
+| `POSTGRES_PORT` | `5432` |
+| `POSTGRES_DB` | `analytics` |
+| `POSTGRES_USER` | `dbt_user` |
+| `MYSQL_HOST` | `127.0.0.1` |
+| `MYSQL_PORT` | `3306` |
+| `MYSQL_DATABASE` | `billing` |
+| `MYSQL_USER` | `billing_user` |
+
+### Secrets tab
+
+| Secret | Value |
+|---|---|
+| `POSTGRES_PASSWORD` | `dbt_password` |
+| `MYSQL_PASSWORD` | `billing_password` |
+| `MYSQL_ROOT_PASSWORD` | `root_password` |
+
+Set them with the `gh` CLI in one go:
+
+```bash
+gh variable set POSTGRES_HOST --body "127.0.0.1"
+gh variable set POSTGRES_PORT --body "5432"
+gh variable set POSTGRES_DB   --body "analytics"
+gh variable set POSTGRES_USER --body "dbt_user"
+gh variable set MYSQL_HOST     --body "127.0.0.1"
+gh variable set MYSQL_PORT     --body "3306"
+gh variable set MYSQL_DATABASE --body "billing"
+gh variable set MYSQL_USER     --body "billing_user"
+
+gh secret set POSTGRES_PASSWORD   --body "dbt_password"
+gh secret set MYSQL_PASSWORD      --body "billing_password"
+gh secret set MYSQL_ROOT_PASSWORD --body "root_password"
+```
+
+> Secrets are not exposed to workflows triggered by pull requests **from forks**. For a
+> fork-based contribution the job will fail on connection rather than silently running
+> against the wrong database — which is the correct failure mode.
