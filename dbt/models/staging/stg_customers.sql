@@ -1,4 +1,6 @@
--- One row per customer. Deduplicated; format standardized, values not repaired.
+-- One row per customer. Deduplicated and standardized, with one light repair: a blank
+-- country becomes 'UNKNOWN'. Safe because data_issues reads raw, so C0008
+-- is still flagged there. Amounts and dates are never substituted.
 
 with source as (
 
@@ -22,7 +24,7 @@ select
     trim(customer_id)                       as customer_id,
     trim(customer_name)                     as customer_name,
     lower(trim(email))                      as email,
-    nullif(upper(trim(country)), '')        as country,
+    coalesce(nullif(upper(trim(country)), ''), 'UNKNOWN')   as country,
     created_at
 from deduplicated
 where _row_num = 1

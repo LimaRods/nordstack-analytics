@@ -54,7 +54,7 @@ current_status as (
 select
     c.customer_id,
     c.customer_name,
-    coalesce(c.country, 'UNKNOWN')              as country,
+    c.country,
     c.created_at                                as customer_since,
 
     coalesce(r.total_revenue_eur, 0)            as total_revenue_eur,

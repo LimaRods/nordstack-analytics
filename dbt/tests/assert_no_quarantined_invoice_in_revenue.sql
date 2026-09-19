@@ -5,6 +5,6 @@ select
     r.subscription_id,
     r.amount_eur
 from {{ ref('int_paid_invoices_eur') }} as r
-inner join {{ ref('invalid_invoices') }} as q
+inner join {{ ref('issues_invoices') }} as q
     on r.invoice_id = q.invoice_id
 where q.excluded_from_marts

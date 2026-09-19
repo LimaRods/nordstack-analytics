@@ -1,4 +1,4 @@
--- Invoices breaching a data-quality rule, detected against the source.
+-- Invoices with a data-quality issue, detected against the source.
 -- excluded_from_marts: true = unusable, must not reach revenue; false = only the
 -- formatting is off and the marts repair it.
 
@@ -18,7 +18,7 @@ subscriptions as (
 quarantined_subscriptions as (
 
     select subscription_id
-    from {{ ref('invalid_subscriptions') }}
+    from {{ ref('issues_subscriptions') }}
     where excluded_from_marts
 
 ),

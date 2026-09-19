@@ -8,15 +8,15 @@ models:
   - name: stg_customers
     description: >
       One row per customer, deduplicated, with casing and whitespace standardized.
-      Values are not repaired: a blank country arrives as NULL rather than 'UNKNOWN',
-      and a malformed email stays malformed. See quarantine/invalid_customers.
+      A blank country is labelled 'UNKNOWN'; nothing else is repaired, so a malformed
+      email stays malformed. See data_issues/issues_customers.
     columns:
       - name: customer_id
         description: Business key. Unique here -- the raw duplicate C0023 is collapsed.
       - name: country
         description: >
-          ISO-2 code, uppercased. NULL where the source was blank (C0008) -- the marts
-          COALESCE it to 'UNKNOWN' when reporting, which is a presentation decision.
+          ISO-2 code, uppercased. 'UNKNOWN' where the source was blank (C0008), so every
+          consumer sees the gap the same way. The defect stays flagged in data_issues.
       - name: email
         description: As supplied. C0016 holds the literal 'not-an-email'.
       - name: created_at
@@ -26,7 +26,7 @@ models:
     description: >
       One row per subscription, deduplicated, with plan and status normalized. Values
       are not repaired: end_date keeps its impossible value (S00034) and monthly_price
-      its negative one (S00048). See quarantine/invalid_subscriptions.
+      its negative one (S00048). See data_issues/issues_subscriptions.
     columns:
       - name: subscription_id
         description: Business key. Unique here -- the raw duplicate S00006 is collapsed.
@@ -45,7 +45,7 @@ models:
     description: >
       One row per monthly invoice. Status and currency are normalized, so downstream
       filters are safe. Amounts are not repaired: null on I000322, negative on
-      I000725-I000731. See quarantine/invalid_invoices.
+      I000725-I000731. See data_issues/issues_invoices.
     columns:
       - name: invoice_id
         description: Business key, unique in the source.

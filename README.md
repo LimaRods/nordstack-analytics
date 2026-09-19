@@ -36,8 +36,8 @@ volume.
                   ┌───────────┴───────────┐
                   │                       │
                   ▼                       ▼
-          raw quality tests          quarantine
-          severity: warn             invalid_* models, built from raw
+          raw quality tests          data_issues
+          severity: warn             issues_* models, built from raw
                   │
                   ▼
                staging                                rename, cast, normalize
@@ -53,17 +53,18 @@ volume.
          MRR     LTV    Churn
 ```
 
-Quarantine is built from raw, not from staging. Both branches read the source:
+The `data_issues` models are built from raw, not from staging. Both branches
+read the source:
 
 ```
 raw
- ├── invalid rows → quarantine (invalid_customers, invalid_subscriptions, invalid_invoices)
- └── accepted rows → staging → intermediate → marts
+ ├── rule breaches → data_issues (issues_customers, issues_subscriptions, issues_invoices)
+ └── all rows      → staging → intermediate → marts
 ```
 
 This is what lets staging normalize freely. Detection runs against the source, so the
-audit trail does not depend on what staging did first. If quarantine read staging
-instead, a cleaned `'PAID '` would already look valid and the defect would disappear.
+audit trail does not depend on what staging did first. If detection read staging instead,
+a cleaned `'PAID '` would already look valid and the defect would disappear.
 
 ---
 
@@ -80,9 +81,10 @@ python ingestion/bootstrap_mysql.py          # CSVs  → MySQL
 python ingestion/sync_mysql_to_postgres.py   # MySQL → Postgres raw
 
 cd dbt
-dbt deps
-dbt build                                    # models + tests, dev target
-dbt docs generate && dbt docs serve
+uv run dbt deps
+uv run dbt build                             # models + tests, dev target
+uv run dbt docs generate
+uv run dbt docs serve --port 8081            # 8080 is taken by Airflow
 ```
 
 Both ingestion scripts are safe to re-run. Counts stay at 121 / 175 / 2,855.
@@ -133,41 +135,51 @@ where each type of problem belongs.
 
 ```
 source defect              → warn        raw tests, visible in every build, never block it
-known-invalid record       → quarantine  isolated from raw, before staging
+rule breach                → recorded    data_issues, built from raw
+record that cannot be used → quarantined excluded_from_marts, never reaches a consumer
 trusted contract violated  → error       mart tests, fail the build
 ```
+
+Two words, deliberately different. A row is **flagged** when it breaks a rule: it is
+recorded in `data_issues` and still flows to the marts. It is **quarantined**
+when it also carries `excluded_from_marts`, which keeps it out of the marts entirely.
+29 rows are flagged; 21 of those are quarantined.
 
 **Raw tests warn.** Raw shows what arrived. Cleaning it so the tests pass would destroy
 the evidence. Twelve warnings fire on every build.
 
-**Quarantine isolates.** Each `invalid_*` model has one boolean per rule breached, not a
-single reason column, so a row that breaks three rules reports all three.
-`excluded_from_marts` separates rows kept out of revenue from rows that are only untidy.
-`I000451` has bad casing, but its €29 is real and still counts.
+**Detection records, it does not decide.** Each `issues_*` model has one boolean per
+rule breached, not a single reason column, so a row that breaks three rules reports all
+three. Separating detection from the decision is the point: `excluded_from_marts` is the
+only thing that withholds a row, and it is a column you can query rather than a `WHERE`
+buried in a model. `I000451` has bad casing but its €29 is real, so it is flagged and
+kept.
 
-**Marts fail the build.** A failure there means bad data got past quarantine and reached
-a consumer.
+**Marts fail the build.** A failure there means a quarantined row reached a consumer.
 
-The build is green because defects are quarantined upstream, not because tests were
+The build is green because unusable records are excluded upstream, not because tests were
 weakened: 40 pass, 12 warn, 0 errors.
 
 ### What was found
 
 | Issue | Example | Handling |
 |---|---|---|
-| Duplicate business key | `C0023`, `S00006` | deduplicated in staging; the rows are identical, so nothing is lost |
-| Orphan foreign key | `S00011`→`C9999`, `I000601`→`S99999` | quarantined, excluded from marts |
-| Negative money | `S00048` (−99.00) and its 7 invoices | quarantined, excluded |
+| Duplicate business key | `C0023`, `S00006` | deduplicated in staging, flagged; the rows are identical, so nothing is lost |
+| Orphan foreign key | `S00011`→`C9999`, `I000601`→`S99999` | quarantined |
+| Negative money | `S00048` (−99.00) and its 7 invoices | quarantined |
 | Paid invoice with null amount | `I000322` | quarantined, not imputed |
-| `end_date` before `start_date` | `S00034` | kept and flagged, excluded from churn only |
-| Casing and trailing whitespace | `'ACTIVE'`, `'PAID '` | normalized in staging |
-| Blank country | `C0008` | stays NULL in staging, reported as `UNKNOWN` in the LTV mart |
-| Malformed email | `C0016` | flagged only, feeds no mart |
-| Future `created_at` | `C0041` (2027) | flagged only |
+| `end_date` before `start_date` | `S00034` | flagged; excluded from churn only |
+| Cancelled with a future `end_date` | `S00020`, `S00139`, `S00167` (2027) | not a defect: kept, marked `is_future_cancellation`. In a real project I would confirm the treatment with a domain expert |
+| Casing and trailing whitespace | `'ACTIVE'`, `'PAID '` | normalized in staging, flagged |
+| Blank country | `C0008` | labelled `UNKNOWN` in staging, flagged |
+| Malformed email | `C0016` | flagged only; the `email` column doesn't feed any mart |
+| Future `created_at` | `C0041` (2027) | flagged |
 | Non-EUR currency | 2 SEK invoices | converted with a static rate |
 
-Quarantine holds 4 customers, 5 subscriptions and 20 invoices. 19 invoices and 2
-subscriptions are kept out of the marts.
+`data_issues` holds 29 rows: 4 customers, 5 subscriptions and 20 invoices.
+Of those, 21 are quarantined — 19 invoices and 2 subscriptions. Every flagged customer
+still reaches the marts, because no customer defect is severe enough to withhold real
+revenue.
 
 Three cases had no obvious answer, so I decided them explicitly:
 
@@ -180,17 +192,22 @@ Three cases had no obvious answer, so I decided them explicitly:
 - **`I000322`** — quarantined, not imputed. Inventing €99 of revenue to keep a row is
   worse than losing the row.
 
-Quarantine gives isolation and traceability today. In a bigger system it is also where
-remediation and alerts to the upstream owner would attach. That is not implemented here.
+This gives traceability today: "what happened to that row?" is a query, not a guess. In
+a bigger system the same models are where remediation, alerts to the upstream owner and
+reprocessing of corrected records would attach. None of that is implemented here.
 
 ---
 
 ## Modelling
 
-**Staging** renames, casts, normalizes and removes duplicate business keys. It
-standardizes format but does not repair values. A blank country stays blank, a negative
-price stays negative. Replacing a value the source never had is a business decision, so
-it belongs in the mart that needs it.
+**Staging** renames, casts, normalizes, removes duplicate business keys and applies
+light repairs. A blank country becomes `'UNKNOWN'` here, so every consumer sees the gap
+the same way instead of writing its own `COALESCE`.
+
+The line is drawn at labels. Repairing a dimension is safe: the value is a label, and
+`C0008` is still flagged because detection reads raw. Repairing a number is not, because
+it changes a figure rather than how one is displayed. So a negative price stays negative,
+a null amount stays null, and both are quarantined instead.
 
 **Intermediate** holds logic used by more than one mart: the EUR revenue base, the
 mart-eligible subscriptions and the FX reference. Logic used by a single mart stays in
@@ -221,9 +238,17 @@ Both marts total €322,890.01, and a mart test checks this on every build.
 Materializations follow current volume, not a rule:
 
 ```
-staging, quarantine, intermediate → views
-marts                             → tables
+staging, data_issues, intermediate → views
+marts                              → tables
 ```
+
+### Lineage
+
+`dbt docs generate` produces the full graph. Both branches out of raw are visible in it:
+`issues_*` reads the sources directly, while the trusted path runs through staging and
+intermediate into the three marts.
+
+![dbt lineage graph](docs/dbt_lineage.png)
 
 ---
 
@@ -283,9 +308,20 @@ scheduled run / airflow dags test  →  dev
 Trigger DAG w/ config → prod       →  prod
 ```
 
-`dev` is the default and the only fallback, so local DAG testing cannot reach production.
-`prod` has to be chosen. The target is logged, pushed to XCom and shown in the email.
-`profiles.yml` reads every value through `env_var()` and holds no literal credentials.
+`dev` is the default and the only fallback, so `prod` has to be chosen deliberately. The
+target is logged, pushed to XCom and shown in the email. `profiles.yml` reads every value
+through `env_var()` and holds no literal credentials.
+
+**This protects the dbt layer and nothing else.** `dlt_sync` writes `analytics.raw` on
+every run whatever target is selected — the dataset name is fixed in the ingestion script,
+and `validate_raw` reads the same schema. So a local `airflow dags test` cannot overwrite
+a mart, but it does reload the raw tables a prod build reads.
+
+That is tolerable here only because the source is static and `replace` is idempotent: the
+reload lands the same 121 / 175 / 2,855 rows either way. It stops being tolerable the
+moment raw has consumers, which is the argument for a separate dev analytics database in
+Next steps. Isolating ingestion by environment is a deployment concern, not something one
+more flag in the DAG should paper over.
 
 ---
 
@@ -325,8 +361,8 @@ This is CI, not CD in the deployment sense. There is no persistent platform to d
 | Source boundary | MySQL → dlt → Postgres | exercises real ingestion, not seeding |
 | Write disposition | `replace` | small static dataset, keeps the planted defects |
 | Raw tests | warn | detect source defects without blocking the build |
-| Quarantine | built from raw | isolate invalid records before staging normalizes them |
-| Staging | format only, no repair | replacing a value is a business decision |
+| Issue detection | built from raw | catch defects before staging normalizes them away |
+| Staging | format, standardization, light repairs | labels may be repaired, numbers may not |
 | Mart tests | error | the published contract has to hold |
 | Deduplication | dbt staging | visible and tested, not a side effect of ingestion |
 | FX | static mapping | allowed by the brief; dated rates are a production concern |
@@ -337,10 +373,7 @@ This is CI, not CD in the deployment sense. There is no persistent platform to d
 
 ## Next steps
 
-**Ingestion.** `replace` is right here because the duplicates are planted on purpose and
-have to survive ingestion. A real billing system would have a real unique ID per table,
-enforced at the source. With reliable keys, `merge` on the business key is the natural
-choice, and CDC after that, instead of extracting everything on a schedule.
+### What I would build next
 
 **Separate the dbt repository.** dbt, ingestion and Airflow share one repository here. I
 would move the dbt project into its own repository and pull it in as a submodule, so one
@@ -351,11 +384,6 @@ well: DAG imports, DAG ID, schedule, task dependencies, and the ingestion script
 against throwaway services. A change in any layer should be validated the same way, and
 deployed the same way after merge.
 
-**A dev analytics database.** Here `dev` and `prod` are two schemas in the same database
-and both read the same `raw`. In a real setup development would have its own analytics
-database with its own raw layer, so ingestion work never writes into production raw
-tables.
-
 **Semantic layer.** The metric definitions live inside the mart SQL. A semantic layer
 would define MRR, LTV and churn once and let BI tools query those definitions, so the
 same metric is not re-implemented in every dashboard.
@@ -365,10 +393,93 @@ loaded by its own pipeline, and convert each invoice at the rate for its account
 Historical invoices should not be revalued at today's rate unless the business asks for
 that.
 
+### Production mindset: decisions waiting on a trigger
+
+The three below are deliberately *not* implemented, and building them here would be cost
+with no benefit at 3,151 rows. They are worth stating anyway, because the useful skill is
+not knowing the pattern — it is knowing the condition that makes it correct, and being
+able to say why that condition has not been met yet. Adding them without the trigger is
+how a small pipeline becomes expensive to run and hard to change.
+
+**Ingestion strategy.** `replace` is right here because the duplicates are planted on
+purpose and have to survive ingestion. A real billing system would have a genuine unique
+ID per table, enforced at the source. With reliable keys, `merge` on the business key is
+the natural choice, and CDC after that, instead of extracting everything on a schedule.
+
+> Trigger: enforced keys at the source, plus a full reload that costs real time or money.
+
 **Materializations.** Tables for large reused intermediate models, incremental for large
-marts that are rebuilt often. Incremental brings its own questions (`unique_key`,
-late-arriving data, lookback windows, full refresh), and none of them are worth answering
-at 3k rows.
+marts that are rebuilt often. Incremental brings its own questions — `unique_key`,
+late-arriving data, lookback windows, full refresh — and each one is a decision that can
+silently produce wrong numbers if answered badly. None of them are worth answering while
+a full build takes five seconds.
+
+> Trigger: model runtime or warehouse cost measured, not assumed.
+
+**A dev analytics database.** Here `dev` and `prod` are two schemas in one database, and
+both read the same `raw`:
+
+```
+analytics
+ ├── raw      one ingestion run, shared by both targets
+ ├── dev      dbt --target dev
+ └── prod     dbt --target prod
+```
+
+That is fine for one person on a static dataset, and wrong as soon as it is not. `raw` is
+the shared part that matters: testing an ingestion change means writing into the same
+tables production reads, and there is no way to try a schema change without touching them.
+
+With a real platform the environments separate at the database, each with its own
+ingestion:
+
+```
+  PRODUCTION                                DEVELOPMENT
+
+  MySQL, live billing                       MySQL read replica or
+        │                                   sanitized snapshot
+  Airflow, prod deployment                        │
+        │  dlt_sync                          Airflow, local or dev
+        ▼                                         │  dlt_sync
+  analytics_prod.raw ───── clone or subset ─────► analytics_dev.raw
+        │                  one direction only           │
+        │  dbt --target prod, CD only                   │  dbt --target dev
+        ▼                                               ▼
+  analytics_prod.marts                        analytics_dev.dbt_<developer>
+        │                                     one schema per person, safe to drop
+        ▼
+  BI, reverse ETL, consumers
+
+  CI, per pull request
+  ephemeral database created and dropped with the job, deferring to the manifest
+  CD published
+```
+
+The two routes into `analytics_dev.raw` are alternatives, not both at once:
+
+| Changing | Route |
+|---|---|
+| dbt models | clone prod raw down; never touch the source |
+| ingestion code | run `dlt_sync` against the replica or fixtures |
+
+The source system is the same in both columns — what differs is which copy development is
+allowed to read. Extracting from the live primary every few minutes is load the billing
+system did not ask for, and it hands developers production credentials they rarely need.
+
+The same DAG file runs in both columns. Nothing in it names an environment: the deployment
+supplies the connections, so `dlt_sync` lands in whichever `raw` its Airflow points at, and
+dbt follows with the matching target.
+
+Three properties that the current setup cannot offer: ingestion changes are tried against
+`analytics_dev.raw` and cannot reach production, two people can build at once without
+overwriting each other, and production is written by CD alone rather than by whoever has
+the credentials.
+
+The arrow only ever points down. Production data may be cloned into development; nothing
+in development writes upward.
+
+> Trigger: more than one person developing, or a production raw layer that consumers
+> depend on.
 
 ---
 

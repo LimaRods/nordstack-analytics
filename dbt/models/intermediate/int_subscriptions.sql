@@ -8,13 +8,13 @@ with subscriptions as (
 
 ),
 
-quarantined as (
+data_issues as (
 
     select
         subscription_id,
         excluded_from_marts,
         has_invalid_end_date
-    from {{ ref('invalid_subscriptions') }}
+    from {{ ref('issues_subscriptions') }}
 
 )
 
@@ -34,6 +34,6 @@ select
      and not coalesce(q.has_invalid_end_date, false)) as is_churn_eligible
 
 from subscriptions as s
-left join quarantined as q
+left join data_issues as q
     on s.subscription_id = q.subscription_id
 where not coalesce(q.excluded_from_marts, false)

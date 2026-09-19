@@ -1,4 +1,4 @@
--- Paid invoices converted to EUR, with quarantined rows removed. The revenue base
+-- Paid invoices converted to EUR, with quarantined rows (excluded_from_marts) removed. The revenue base
 -- for fct_mrr and customer_ltv.
 
 with invoices as (
@@ -11,7 +11,7 @@ with invoices as (
 excluded as (
 
     select invoice_id
-    from {{ ref('invalid_invoices') }}
+    from {{ ref('issues_invoices') }}
     where excluded_from_marts
 
 )
