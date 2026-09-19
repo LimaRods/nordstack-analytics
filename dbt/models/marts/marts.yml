@@ -2,7 +2,7 @@ version: 2
 
 models:
 
-  # Error severity: a failure here means bad data escaped quarantine.
+  # Error severity: a failure here means a quarantined row reached a consumer.
 
   - name: fct_mrr
     description: >

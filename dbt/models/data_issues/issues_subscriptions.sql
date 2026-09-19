@@ -1,4 +1,4 @@
--- Subscriptions breaching a data-quality rule, detected against the source.
+-- Subscriptions with a data-quality issue, detected against the source.
 -- excluded_from_marts is true only where the row cannot be attributed or priced.
 
 with source as (

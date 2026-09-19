@@ -17,7 +17,7 @@ models:
   nordstack:
     staging:
       +materialized: view
-    quarantine:
+    data_issues:
       +materialized: view
     intermediate:
       +materialized: view
@@ -27,7 +27,5 @@ models:
 # Raw warns, marts error.
 data_tests:
   nordstack:
-    staging:
-      +severity: error
     marts:
       +severity: error

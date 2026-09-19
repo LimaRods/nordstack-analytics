@@ -1,4 +1,4 @@
--- Customers breaching a data-quality rule, detected against the source.
+-- Customers with a data-quality issue, detected against the source.
 -- No customer defect is severe enough to withhold the row from the marts.
 
 with source as (
