@@ -77,10 +77,15 @@ uv run dbt docs serve --port 8081            # 8080 is taken by Airflow
 Both ingestion scripts are safe to re-run: counts stay at 121 / 175 / 2,855.
 
 ```bash
-export AIRFLOW_HOME="$(pwd)/airflow"
+source scripts/airflow-env.sh                # AIRFLOW_HOME + macOS fork-safety vars
 airflow standalone                           # UI on :8080
 airflow dags test nordstack_analytics        # one full run, no scheduler
+
+airflow dags trigger nordstack_analytics -c '{"dbt_target": "prod"}'
 ```
+
+Source the script before any Airflow command. Without an absolute `AIRFLOW_HOME` Airflow
+falls back to `~/airflow` and reads whatever config lives there.
 
 Connection details: [CONNECTION_DETAILS.md](CONNECTION_DETAILS.md).
 
@@ -250,22 +255,33 @@ idempotent; not tolerable once raw has consumers. See Next steps.
 | [`dbt-ci.yml`](.github/workflows/dbt-ci.yml) | pull request | `state:modified+` | `dev` |
 | [`dbt-cd.yml`](.github/workflows/dbt-cd.yml) | merge to `main`, or manual | everything | `prod` |
 
+**Read this section knowing there is no persistent warehouse behind it.** Both workflows
+run against Postgres and MySQL service containers that are created empty and destroyed
+with the job, so every run bootstraps MySQL from the CSVs and reloads `raw` before dbt
+starts. Nothing survives, and "production" is whatever `POSTGRES_*` points at.
+
+That makes two parts of this demonstrative rather than useful: the `state:modified+`
+selection, which has to build a baseline first because there is nothing to defer to, and
+the word production in the CD workflow. What is real is the validation. Every model is
+built and all 52 tests run against a live Postgres, so a broken model or a failing test
+blocks the pull request.
+
 CI runs only when `dbt/`, `ingestion/` or `seed_data/` change. `state:modified+` selects
-changed models plus everything downstream. The `+` is what stops a break hiding behind
-an untouched consumer. Verified on a real PR: editing `stg_invoices` rebuilt
+changed models plus everything downstream. The `+` is what stops a break hiding behind an
+untouched consumer. Verified on a real PR: editing `stg_invoices` rebuilt
 `int_paid_invoices_eur`, `fct_mrr` and `customer_ltv`, and skipped `subscription_churn`.
+`ingestion/` is in the trigger because it defines the shape of `raw`, not because
+ingestion itself is tested. Airflow is covered by neither workflow.
 
-CD builds everything, because a deployment must leave production consistent.
-`DBT_TARGET=prod` is set in exactly one place, the CD workflow. CI leaves it unset, so a
-pull request cannot write to production.
+CD builds everything. A partial build is not an option against a database that starts
+empty: it would leave only the changed models behind. `DBT_TARGET=prod` is set in
+exactly one place, the CD workflow. CI leaves it unset, so a pull request cannot write to
+production.
 
-**The honest cost of Slim CI here.** `--defer --state` needs a manifest to compare against
-and real tables to resolve to. A GitHub runner has neither, so CI builds the base branch
-first to have something to defer against. Measured: baseline 5s, selective build 5s, dbt
-10s of a 1m51s run. At this size selective building costs more than it saves. It stays
-because swapping the baseline for a real production manifest is a one-step change.
-
-This is CI, not CD in the deployment sense; there is no persistent platform to deploy to.
+**What the ephemeral database costs.** Measured on a real run: baseline 5s, selective
+build 5s, dbt 10s out of 1m51s total. At this size selective building costs more than it
+saves. It stays because pointing it at a persistent warehouse is a one-step change, and
+because the substitution is documented rather than hidden.
 
 ---
 
