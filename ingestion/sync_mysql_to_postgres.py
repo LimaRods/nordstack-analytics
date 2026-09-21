@@ -47,22 +47,22 @@ def load_dotenv(path: Path) -> None:
 def mysql_url() -> str:
     """Source connection string."""
     return (
-        f"mysql+pymysql://{os.environ.get('MYSQL_USER', 'billing_user')}"
-        f":{os.environ.get('MYSQL_PASSWORD', 'billing_password')}"
-        f"@{os.environ.get('MYSQL_HOST', '127.0.0.1')}"
-        f":{os.environ.get('MYSQL_PORT', '3306')}"
-        f"/{os.environ.get('MYSQL_DATABASE', 'billing')}"
+        f"mysql+pymysql://{os.environ.get('MYSQL_USER')}"
+        f":{os.environ.get('MYSQL_PASSWORD')}"
+        f"@{os.environ.get('MYSQL_HOST')}"
+        f":{os.environ.get('MYSQL_PORT')}"
+        f"/{os.environ.get('MYSQL_DATABASE')}"
     )
 
 
 def postgres_url() -> str:
     """Destination connection string."""
     return (
-        f"postgresql://{os.environ.get('POSTGRES_USER', 'dbt_user')}"
-        f":{os.environ.get('POSTGRES_PASSWORD', 'dbt_password')}"
-        f"@{os.environ.get('POSTGRES_HOST', '127.0.0.1')}"
-        f":{os.environ.get('POSTGRES_PORT', '5432')}"
-        f"/{os.environ.get('POSTGRES_DB', 'analytics')}"
+        f"postgresql://{os.environ.get('POSTGRES_USER')}"
+        f":{os.environ.get('POSTGRES_PASSWORD')}"
+        f"@{os.environ.get('POSTGRES_HOST')}"
+        f":{os.environ.get('POSTGRES_PORT')}"
+        f"/{os.environ.get('POSTGRES_DB')}"
     )
 
 

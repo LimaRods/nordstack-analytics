@@ -44,5 +44,6 @@ airflow/webserver_config.py
 airflow/standalone_admin_password.txt
 logs/
 
-# Personal reading notes, not part of the submission
+# Personal notes, not part of the submission
 SOURCES.md
+CONCEPTS.md
