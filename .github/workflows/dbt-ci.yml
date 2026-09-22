@@ -8,6 +8,7 @@ on:
       - 'dbt/**'
       - 'ingestion/**'
       - 'seed_data/**'
+      - 'requirements.txt'
       - '.github/workflows/dbt-ci.yml'
 
 concurrency:
@@ -82,13 +83,11 @@ jobs:
       # State comparison needs a manifest to diff against and real tables to defer to.
       # With a persistent warehouse this step disappears.
       - name: Build baseline from ${{ github.base_ref }}
-        env:
-          DBT_TARGET: prod
         run: |
           git worktree add /tmp/baseline "origin/${{ github.base_ref }}"
-          cp -R dbt/dbt_packages /tmp/baseline/dbt/dbt_packages 2>/dev/null || true
           cd /tmp/baseline/dbt
-          dbt build --target-path /tmp/baseline-target
+          dbt deps
+          dbt build --target prod --target-path /tmp/baseline-target
 
       # The `+` rebuilds downstream models, so a break cannot hide behind an untouched
       # consumer. DBT_TARGET stays unset, so a PR cannot write to production.

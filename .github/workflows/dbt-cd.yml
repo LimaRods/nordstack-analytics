@@ -1,8 +1,8 @@
 name: dbt CD
 
-# Promotes the dbt project on merge to main: a full build against prod, then the docs
-# and the manifest. "Production" here is whatever POSTGRES_* points at, so pointing this
-# at a real warehouse is a change to repository variables, not to this file.
+# Promotes only changed dbt resources and their descendants to prod. The take-home has
+# no persistent warehouse, so the previous production relations are reconstructed first;
+# a real deployment would retain those relations and omit that reconstruction step.
 
 on:
   push:
@@ -11,8 +11,13 @@ on:
       - 'dbt/**'
       - 'ingestion/**'
       - 'seed_data/**'
+      - 'requirements.txt'
       - '.github/workflows/dbt-cd.yml'
   workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
 
 # Never two deployments at once, and never cancel one midway.
 concurrency:
@@ -65,6 +70,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -88,8 +95,82 @@ jobs:
         working-directory: dbt
         run: dbt debug --target prod
 
-      # Full build: a deployment must leave production consistent.
-      - name: Deploy models to production
+      # The manifest identifies what changed; the SHA lets this ephemeral job recreate
+      # the relations that a persistent production warehouse would already contain.
+      - name: Download previous successful production state
+        id: previous_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="$(gh run list \
+            --workflow dbt-cd.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+
+          if [ -z "$run_id" ] || ! gh run download "$run_id" \
+            --name prod-state \
+            --dir /tmp/prod-state; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No prior production state; this deployment will build everything."
+            exit 0
+          fi
+
+          if [ ! -f /tmp/prod-state/manifest.json ] || \
+             [ ! -f /tmp/prod-state/deployed-sha.txt ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Prior state is incomplete; this deployment will build everything."
+            exit 0
+          fi
+
+          deployed_sha="$(tr -d '[:space:]' < /tmp/prod-state/deployed-sha.txt)"
+          if [ -z "$deployed_sha" ] || \
+             ! git cat-file -e "${deployed_sha}^{commit}" 2>/dev/null; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Prior state is incomplete; this deployment will build everything."
+            exit 0
+          fi
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$deployed_sha" >> "$GITHUB_OUTPUT"
+
+          if git diff --name-only "$deployed_sha" "$GITHUB_SHA" \
+            | grep -Eq '^(ingestion/|seed_data/|requirements\.txt$)'; then
+            echo "upstream_changed=true" >> "$GITHUB_OUTPUT"
+            echo "Raw inputs or runtime dependencies changed; all models will be rebuilt."
+          else
+            echo "upstream_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Reconstruct previous production relations
+        if: >-
+          steps.previous_state.outputs.available == 'true' &&
+          steps.previous_state.outputs.upstream_changed == 'false'
+        env:
+          DEPLOYED_SHA: ${{ steps.previous_state.outputs.sha }}
+        run: |
+          git worktree add /tmp/production-baseline "$DEPLOYED_SHA"
+          cd /tmp/production-baseline/dbt
+          dbt deps
+          dbt run --target prod --target-path /tmp/production-baseline-target
+
+      - name: Deploy modified models and their downstream to production
+        if: >-
+          steps.previous_state.outputs.available == 'true' &&
+          steps.previous_state.outputs.upstream_changed == 'false'
+        working-directory: dbt
+        run: |
+          dbt build \
+            --target prod \
+            --select "state:modified+" \
+            --state /tmp/prod-state
+
+      - name: Deploy the full project to production
+        if: >-
+          steps.previous_state.outputs.available != 'true' ||
+          steps.previous_state.outputs.upstream_changed == 'true'
         working-directory: dbt
         run: dbt build --target prod
 
@@ -97,13 +178,22 @@ jobs:
         working-directory: dbt
         run: dbt docs generate --target prod
 
-      - name: Publish production manifest
+      # Save both logical state and the revision that produced the physical relations.
+      # Do this only after a successful deployment so a failed run cannot become the
+      # baseline for the next one.
+      - name: Stage production state
+        working-directory: dbt
+        run: |
+          mkdir -p deploy-state
+          cp target/manifest.json deploy-state/manifest.json
+          cp target/run_results.json deploy-state/run_results.json
+          echo "$GITHUB_SHA" > deploy-state/deployed-sha.txt
+
+      - name: Publish production state
         uses: actions/upload-artifact@v4
         with:
-          name: prod-manifest
-          path: |
-            dbt/target/manifest.json
-            dbt/target/run_results.json
+          name: prod-state
+          path: dbt/deploy-state/
           retention-days: 90
 
       - name: Publish documentation

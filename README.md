@@ -105,7 +105,7 @@ Connection details: [CONNECTION_DETAILS.md](CONNECTION_DETAILS.md).
 | Deduplication | dbt staging | visible and tested, not a side effect of ingestion |
 | FX | static mapping | allowed by the brief; dated rates are a production concern |
 | Default dbt target | `dev` | production has to be chosen, never inherited |
-| CI selection | `state:modified+` with baseline | shows the pattern at almost no cost |
+| CI/CD selection | `state:modified+` with prior state | rebuilds every affected downstream consumer |
 
 **On `replace` rather than `merge`:** dlt's merge deduplicates on the primary key before
 writing, so it would collapse the planted duplicates `C0023` and `S00006` during
@@ -253,35 +253,42 @@ idempotent; not tolerable once raw has consumers. See Next steps.
 | Workflow | Trigger | Builds | Target |
 |---|---|---|---|
 | [`dbt-ci.yml`](.github/workflows/dbt-ci.yml) | pull request | `state:modified+` | `dev` |
-| [`dbt-cd.yml`](.github/workflows/dbt-cd.yml) | merge to `main`, or manual | everything | `prod` |
+| [`dbt-cd.yml`](.github/workflows/dbt-cd.yml) | merge to `main`, or manual | `state:modified+` (full fallback) | `prod` |
 
 **Read this section knowing there is no persistent warehouse behind it.** Both workflows
 run against Postgres and MySQL service containers that are created empty and destroyed
 with the job, so every run bootstraps MySQL from the CSVs and reloads `raw` before dbt
 starts. Nothing survives, and "production" is whatever `POSTGRES_*` points at.
 
-That makes two parts of this demonstrative rather than useful: the `state:modified+`
-selection, which has to build a baseline first because there is nothing to defer to, and
-the word production in the CD workflow. What is real is the validation. Every model is
-built and all 52 tests run against a live Postgres, so a broken model or a failing test
-blocks the pull request.
+That makes the state-aware workflows demonstrations of the production pattern rather than
+runtime optimizations. CI builds the base branch because there is nothing to defer to. CD
+downloads the manifest and deployed commit SHA from its last successful run, reconstructs
+that revision's relations, then applies only `state:modified+` from the current revision.
+With a persistent production warehouse, those relations would already exist and the
+reconstruction step would disappear. CD does not need `--defer`: unchanged `ref()` calls
+resolve directly to relations already present in the same `prod` target. What is real is
+the validation: CI builds every model and runs all 52 tests against live Postgres, so a
+broken model or failing test blocks the pull request.
 
-CI runs only when `dbt/`, `ingestion/` or `seed_data/` change. `state:modified+` selects
-changed models plus everything downstream. The `+` is what stops a break hiding behind an
-untouched consumer. Verified on a real PR: editing `stg_invoices` rebuilt
+CI runs only when `dbt/`, `ingestion/`, `seed_data/` or `requirements.txt` change.
+`state:modified+` selects changed models plus everything downstream. The `+` is what stops
+a break hiding behind an untouched consumer. Verified on a real PR: editing `stg_invoices`
+rebuilt
 `int_paid_invoices_eur`, `fct_mrr` and `customer_ltv`, and skipped `subscription_churn`.
 `ingestion/` is in the trigger because it defines the shape of `raw`, not because
 ingestion itself is tested. Airflow is covered by neither workflow.
 
-CD builds everything. A partial build is not an option against a database that starts
-empty: it would leave only the changed models behind. `DBT_TARGET=prod` is set in
-exactly one place, the CD workflow. CI leaves it unset, so a pull request cannot write to
-production.
+CD publishes its manifest only after a successful deployment, so a failed run can never
+become the next baseline. The first run, an expired artifact, or a change under
+`ingestion/`, `seed_data/` or `requirements.txt` triggers a full build. The latter matters
+because dbt state detects project-code changes, not new source data or loader behavior.
+`DBT_TARGET=prod` is set in exactly one place, the CD workflow. CI leaves it unset, so a
+pull request cannot write to production.
 
-**What the ephemeral database costs.** Measured on a real run: baseline 5s, selective
-build 5s, dbt 10s out of 1m51s total. At this size selective building costs more than it
-saves. It stays because pointing it at a persistent warehouse is a one-step change, and
-because the substitution is documented rather than hidden.
+**What the ephemeral database costs.** Measured in CI: baseline 5s, selective build 5s,
+dbt 10s out of 1m51s total. At this size state selection costs more than it saves. It
+stays to show the hand-off from tested change to selective production deployment, with
+the disposable-warehouse substitution documented rather than hidden.
 
 ---
 

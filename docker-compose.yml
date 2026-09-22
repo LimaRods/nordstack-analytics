@@ -1,5 +1,5 @@
 # Local infrastructure: MySQL as the simulated billing source, PostgreSQL as the
-# analytics warehouse. Defaults work from a clean clone; override them via .env.
+# analytics warehouse. Values are supplied by .env; no credentials live here.
 
 name: nordstack
 
@@ -8,15 +8,15 @@ services:
     image: postgres:16
     container_name: nordstack-postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-dbt_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dbt_password}
-      POSTGRES_DB: ${POSTGRES_DB:-analytics}
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dbt_user} -d ${POSTGRES_DB:-analytics}"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -25,12 +25,12 @@ services:
     image: mysql:8.0
     container_name: nordstack-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-billing}
-      MYSQL_USER: ${MYSQL_USER:-billing_user}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-billing_password}
+      - MYSQL_ROOT_PASSWORD
+      - MYSQL_DATABASE
+      - MYSQL_USER
+      - MYSQL_PASSWORD
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "${MYSQL_PORT}:3306"
     volumes:
       - mysqldata:/var/lib/mysql
     healthcheck:
