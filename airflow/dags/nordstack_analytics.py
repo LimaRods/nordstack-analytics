@@ -2,7 +2,7 @@
 
 Runs every five minutes and emails on success and failure. Three tasks rather than one
 script, so a failure says which layer it came from and a retry only repeats that task.
-Every task is idempotent, so retries are safe; they are bounded at two attempts.
+Every task is idempotent, so retries are safe; they are bounded at two retries.
 """
 
 from __future__ import annotations
